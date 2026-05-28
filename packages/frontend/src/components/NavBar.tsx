@@ -27,7 +27,7 @@ export function NavBar() {
     }, []);
     const handleNavigateCreate = useCallback(() => router.push("/create"), [router]);
     const handleNavigateFeed = useCallback(() => router.push("/feed"), [router]);
-    const handleNavigateLeaderboard = useCallback(() => router.push("/#leaderboard"), [router]);
+    const handleNavigateLeaderboard = useCallback(() => router.push("/leaderboard"), [router]);
 
     useKeyboardShortcuts({
         onOpenSearch: handleOpenSearch,
