@@ -6,15 +6,6 @@ import { PriceDeviationService } from './deiviation.service';
 import { PRICE_DEVIATION_CONFIG } from './config/oracle.config';
 import { OraclePriceEntity } from './entities/storedOraclePrice.entity';
 
-/**
- * Represents a stored oracle price row.
- * Adjust to match your actual OraclePrice / Price entity.
- */
-interface StoredOraclePrice {
-  symbol: string;
-  usdPrice: number;
-}
-
 @Injectable()
 export class PriceDeviationWorker {
   private readonly logger = new Logger(PriceDeviationWorker.name);
@@ -27,7 +18,7 @@ export class PriceDeviationWorker {
      * e.g. @InjectRepository(OraclePriceEntity)
      */
     @InjectRepository(OraclePriceEntity)
-    private readonly oraclePriceRepo: Repository<StoredOraclePrice>,
+    private readonly oraclePriceRepo: Repository<OraclePriceEntity>,
   ) {}
 
   @Cron(PRICE_DEVIATION_CONFIG.cronExpression)
@@ -42,7 +33,7 @@ export class PriceDeviationWorker {
       return;
     }
 
-    let oraclePrices: StoredOraclePrice[];
+    let oraclePrices: OraclePriceEntity[];
 
     try {
       // Fetch the latest stored price per symbol.

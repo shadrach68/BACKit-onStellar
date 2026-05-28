@@ -15,17 +15,22 @@ export function NotificationBell({ userId }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const { notifications, unreadCount, markRead } = useNotifications(userId);
     const [animateIds, setAnimateIds] = useState<number[]>([]);
+    const animatedIdsRef = useRef<Set<number>>(new Set());
 
     // Animate new notifications
     useEffect(() => {
         if (notifications.length === 0) return;
         const latestId = notifications[0].id;
-        if (!animateIds.includes(latestId)) {
-            setAnimateIds((prev) => [latestId, ...prev].slice(0, 10));
-            setTimeout(() => {
-                setAnimateIds((prev) => prev.filter((id) => id !== latestId));
-            }, 1200);
-        }
+        if (animatedIdsRef.current.has(latestId)) return;
+
+        animatedIdsRef.current.add(latestId);
+        setAnimateIds((prev) => [latestId, ...prev].slice(0, 10));
+        const timeoutId = window.setTimeout(() => {
+            setAnimateIds((prev) => prev.filter((id) => id !== latestId));
+            animatedIdsRef.current.delete(latestId);
+        }, 1200);
+
+        return () => window.clearTimeout(timeoutId);
     }, [notifications]);
 
     const handleMarkAllRead = async () => {

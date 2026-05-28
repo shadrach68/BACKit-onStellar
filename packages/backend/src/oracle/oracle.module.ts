@@ -12,10 +12,16 @@ import { CoinGeckoService } from './coinGeko.service';
 import { PriceDeviationService } from './deiviation.service';
 import { PriceDeviationWorker } from './deviation.worker';
 import { PriceDeviationLog } from './entities/log.entity';
+import { OraclePriceEntity } from './entities/storedOraclePrice.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([OracleCall, OracleOutcome, PriceDeviationLog]),
+    TypeOrmModule.forFeature([
+      OracleCall,
+      OracleOutcome,
+      PriceDeviationLog,
+      OraclePriceEntity,
+    ]),
     forwardRef(() => CallsModule),
   ],
   controllers: [OracleController],
