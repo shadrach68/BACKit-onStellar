@@ -6,31 +6,37 @@ import { truncateAddress } from '@/lib/utils'
 import { Clock, CheckCircle, XCircle, Users } from 'lucide-react'
 
 interface ProfileTabsProps {
-  createdCalls: Call[]
-  participatedCalls: Call[]
-  resolvedCalls: Call[]
-  followers: User[]
-  following: User[]
-  followersTotal: number
-  followingTotal: number
-  onLoadMoreFollowers: () => Promise<void>
-  onLoadMoreFollowing: () => Promise<void>
-  onFollowToggle: (address: string, isFollowing: boolean) => Promise<void>
+   createdCalls: Call[]
+   participatedCalls: Call[]
+   resolvedCalls: Call[]
+   followers: User[]
+   following: User[]
+   followersTotal: number
+   followingTotal: number
+   suggestedUsers?: User[]
+   onLoadMoreFollowers: () => Promise<void>
+   onLoadMoreFollowing: () => Promise<void>
+   onFollowToggle: (address: string, isFollowing: boolean) => Promise<void>
+   loading?: boolean
+   error?: string | null
 }
 
 export default function ProfileTabs({
-  createdCalls,
-  participatedCalls,
-  resolvedCalls,
-  followers,
-  following,
-  followersTotal,
-  followingTotal,
-  onLoadMoreFollowers,
-  onLoadMoreFollowing,
-  onFollowToggle
-}: ProfileTabsProps) {
-  const [activeTab, setActiveTab] = useState<TabType | 'followers' | 'following'>('created')
+   createdCalls,
+   participatedCalls,
+   resolvedCalls,
+   followers,
+   following,
+   followersTotal,
+   followingTotal,
+   suggestedUsers = [],
+   onLoadMoreFollowers,
+   onLoadMoreFollowing,
+   onFollowToggle,
+   loading = false,
+   error = null,
+ }: ProfileTabsProps) {
+   const [activeTab, setActiveTab] = useState<TabType>('created')
   const [followersPage, setFollowersPage] = useState(1)
   const [followingPage, setFollowingPage] = useState(1)
 
