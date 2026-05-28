@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { UserProfile } from '@/types'
+import { UserProfile, User } from '@/types'
 
+// Mock data for users
 const mockUsers: Record<string, UserProfile> = {
   'GD5DQ6KQZYZ2JY5YKZ7XQYBZQZQZQZQZQZQZQZQZQZQZQZQZQZQZQ': {
     user: {
@@ -79,11 +80,39 @@ const mockUsers: Record<string, UserProfile> = {
   }
 }
 
+// Mock lists for followers and following (we'll generate some mock users)
+const generateMockUser = (index: number, baseAddress: string): User => {
+  const addresses = [
+    'GD3DQ6KQZYZ2JY5YKZ7XQYBZQZQZQZQZQZQZQZQZQZQZQZQZQZQZQ',
+    'GD1DQ6KQZYZ2JY5YKZ7XQYBZQZQZQZQZQZQZQZQZQZQZQZQZQZQZQ',
+    'GD7DQ6KQZYZ2JY5YKZ7XQYBZQZQZQZQZQZQZQZQZQZQZQZQZQZQZQ',
+    'GD9DQ6KQZYZ2JY5YKZ7XQYBZQZQZQZQZQZQZQZQZQZQZQZQZQZQZQ',
+    'GDDDQ6KQZYZ2JY5YKZ7XQYBZQZQZQZQZQZQZQZQZQZQZQZQZQZQZQ'
+  ]
+  const address = addresses[index % addresses.length] + (index * 1000).toString().slice(-3)
+  return {
+    address,
+    displayName: `User ${index + 1}`,
+    winRate: 0.5 + Math.random() * 0.5,
+    totalCalls: Math.floor(Math.random() * 50),
+    followers: Math.floor(Math.random() * 1000),
+    following: Math.floor(Math.random() * 500),
+    isFollowing: false
+  }
+}
+
+const mockFollowers = Array.from({ length: 200 }, (_, i) => generateMockUser(i, 'follower'))
+const mockFollowing = Array.from({ length: 150 }, (_, i) => generateMockUser(i, 'following'))
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ address: string }> }
 ) {
   const { address } = await params
+  const url = new URL(request.url)
+  const type = url.searchParams.get('type')
+  const limit = parseInt(url.searchParams.get('limit') || '20')
+  const page = parseInt(url.searchParams.get('page') || '1')
 
   const userProfile = mockUsers[address]
 
@@ -94,6 +123,32 @@ export async function GET(
     )
   }
 
+  // If type is specified, return paginated list of followers or following
+  if (type === 'followers') {
+    const start = (page - 1) * limit
+    const end = start + limit
+    const data = mockFollowers.slice(start, end)
+    return NextResponse.json({
+      data,
+      total: mockFollowers.length,
+      page,
+      limit
+    })
+  }
+
+  if (type === 'following') {
+    const start = (page - 1) * limit
+    const end = start + limit
+    const data = mockFollowing.slice(start, end)
+    return NextResponse.json({
+      data,
+      total: mockFollowing.length,
+      page,
+      limit
+    })
+  }
+
+  // Otherwise, return the user profile
   return NextResponse.json(userProfile)
 }
 
