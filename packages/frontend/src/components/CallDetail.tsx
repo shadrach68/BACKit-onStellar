@@ -7,6 +7,7 @@ import StakeBar from "./StakeBar";
 import ActivityLog from "./ActivityLog";
 import StakingInterface from "./StakingInterface";
 import StakingDrawer from "./StakingDrawer";
+import PriceChart from "./PriceChart";
 import { CallDetailData } from "@/types";
 import { useMediaQuery } from "@/hooks/useMediaQuery"; 
 
@@ -53,6 +54,14 @@ export default function CallDetail({ call }: { call: CallDetailData }) {
         {/* Left column - Main content */}
         <div className="lg:col-span-2 space-y-8">
           <CallDetailHeader call={call} timeLeft={timeLeft} odds={odds} />
+
+          {/* Historical Price Chart */}
+          <PriceChart
+            pairId={call.pairId}
+            startPrice={call.startPrice}
+            createdAt={call.createdAt}
+            currentPrice={call.token.price}
+          />
 
           {/* Condition/Thesis section */}
           <div className="bg-white rounded-2xl border border-gray-100 p-8 shadow-sm">

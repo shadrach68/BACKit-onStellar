@@ -6,6 +6,8 @@ export interface User {
   followers: number
   following: number
   isFollowing?: boolean
+  bio?: string
+  avatarUrl?: string | null
 }
 
 export interface Call {
@@ -64,6 +66,8 @@ export interface CallDetailData {
   participants: Participant[];
   condition: string;
   conditionJson?: any;
+  startPrice?: number;
+  createdAt?: string;
 }
 
 export type StakeLedgerItem = {

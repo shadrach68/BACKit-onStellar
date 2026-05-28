@@ -3,7 +3,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { StakeLedgerItem, UserStakesResponse } from '@/types'
+import { StakeLedgerItem, UserStakesResponse, UserProfile } from '@/types'
+import { useWalletContext } from '@/components/WalletContext'
+import ProfileHeader from '@/components/ProfileHeader'
+import ProfileStats from '@/components/ProfileStats'
+import ProfileTabs from '@/components/ProfileTabs'
+import { ProfileEditor } from '@/components/ProfileEditor'
 
 const PAGE_SIZE = 20
 
@@ -299,6 +304,17 @@ export default function StakesPage() {
   const params = useParams()
   const address = params.address as string
 
+  // Wallet Context for current logged-in address
+  const { publicKey } = useWalletContext()
+  const isOwnProfile = !!publicKey && publicKey === address
+
+  // Profile data states
+  const [profile, setProfile] = useState<UserProfile | null>(null)
+  const [profileLoading, setProfileLoading] = useState(true)
+  const [profileError, setProfileError] = useState<string | null>(null)
+  const [isEditingProfile, setIsEditingProfile] = useState(false)
+
+  // Stakes ledger states
   const [stakes, setStakes] = useState<StakeLedgerItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -307,6 +323,25 @@ export default function StakesPage() {
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL')
   const [positionFilter, setPositionFilter] = useState<PositionFilter>('ALL')
+
+  const fetchProfile = useCallback(async () => {
+    if (!address) return
+    try {
+      setProfileLoading(true)
+      setProfileError(null)
+      const res = await fetch(`/api/users/${address}`)
+      if (!res.ok) {
+        setProfileError('Failed to load user profile')
+        return
+      }
+      const data = await res.json()
+      setProfile(data)
+    } catch {
+      setProfileError('Failed to load user profile')
+    } finally {
+      setProfileLoading(false)
+    }
+  }, [address])
 
   const fetchStakes = useCallback(async (p: number) => {
     if (!address) return
@@ -337,8 +372,33 @@ export default function StakesPage() {
   }, [address])
 
   useEffect(() => {
+    fetchProfile()
     fetchStakes(page)
-  }, [fetchStakes, page])
+  }, [fetchProfile, fetchStakes, page])
+
+  const handleFollow = async () => {
+    if (!address) return
+    try {
+      const res = await fetch(`/api/users/${address}/follow`, { method: 'POST' })
+      if (res.ok) {
+        fetchProfile()
+      }
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleUnfollow = async () => {
+    if (!address) return
+    try {
+      const res = await fetch(`/api/users/${address}/unfollow`, { method: 'POST' })
+      if (res.ok) {
+        fetchProfile()
+      }
+    } catch (err) {
+      console.error(err)
+    }
+  }
 
   // Client-side filter on top of the fetched page
   const filtered = stakes.filter((s) => {
@@ -369,30 +429,59 @@ export default function StakesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
+    <div className="min-h-screen bg-gray-50 pt-24 pb-12">
       <div className="max-w-4xl mx-auto px-4 space-y-6">
 
         {/* Breadcrumb */}
         <nav className="flex items-center gap-2 text-sm text-gray-500">
-          <Link href={`/profile/${address}`} className="hover:text-gray-700 transition-colors">
-            Profile
-          </Link>
+          <span className="text-gray-450">Profile</span>
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
-          <span className="text-gray-900 font-medium">My Stakes</span>
+          <span className="text-gray-900 font-medium">Overview</span>
         </nav>
 
-        {/* Main card */}
+        {/* Profile Details Block */}
+        {profileLoading ? (
+          <div className="bg-white rounded-lg shadow-md border border-gray-200 p-6 animate-pulse flex items-center space-x-4">
+            <div className="w-16 h-16 bg-gray-200 rounded-full" />
+            <div className="flex-1 space-y-2">
+              <div className="h-5 bg-gray-200 rounded w-1/3" />
+              <div className="h-4 bg-gray-200 rounded w-1/2" />
+            </div>
+          </div>
+        ) : profileError || !profile ? (
+          <div className="bg-white rounded-lg shadow-md border border-gray-200 p-6 text-center text-red-500">
+            {profileError || "Profile details not found"}
+          </div>
+        ) : (
+          <>
+            <ProfileHeader
+              user={profile.user}
+              isOwnProfile={isOwnProfile}
+              onFollow={handleFollow}
+              onUnfollow={handleUnfollow}
+              onEditProfile={() => setIsEditingProfile(true)}
+            />
+            <ProfileStats user={profile.user} />
+            <ProfileTabs
+              createdCalls={profile.createdCalls || []}
+              participatedCalls={profile.participatedCalls || []}
+              resolvedCalls={profile.resolvedCalls || []}
+            />
+          </>
+        )}
+
+        {/* Stakes Ledger table section */}
         <div className="bg-white rounded-lg shadow-md border border-gray-200 overflow-hidden">
 
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-4 sm:px-6 border-b border-gray-100">
             <div>
-              <h1 className="text-lg font-semibold text-gray-900">My Stakes</h1>
+              <h2 className="text-lg font-semibold text-gray-900">Stakes Ledger</h2>
               {!loading && !error && (
                 <p className="text-sm text-gray-500 mt-0.5">
-                  {total} stake{total !== 1 ? 's' : ''} total
+                  {total} stake{total !== 1 ? 's' : ''} placed
                 </p>
               )}
             </div>
@@ -400,7 +489,7 @@ export default function StakesPage() {
               onClick={() => fetchStakes(page)}
               disabled={loading}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Refresh"
+              title="Refresh Stakes"
             >
               <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -460,7 +549,7 @@ export default function StakesPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-50 bg-white">
                     {loading
-                      ? Array.from({ length: PAGE_SIZE }).map((_, i) => <StakeRowSkeleton key={i} />)
+                      ? Array.from({ length: 5 }).map((_, i) => <StakeRowSkeleton key={i} />)
                       : filtered.length === 0
                       ? (
                         <tr>
@@ -489,7 +578,22 @@ export default function StakesPage() {
             </>
           )}
         </div>
+
       </div>
+
+      {/* Profile Editor Modal overlay */}
+      {isEditingProfile && profile && (
+        <ProfileEditor
+          userAddress={address}
+          initialDisplayName={profile.user.displayName || ''}
+          initialBio={profile.user.bio || ''}
+          initialAvatarUrl={profile.user.avatarUrl || null}
+          onClose={() => {
+            setIsEditingProfile(false)
+            fetchProfile()
+          }}
+        />
+      )}
     </div>
   )
-}
+}

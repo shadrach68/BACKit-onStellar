@@ -77,6 +77,7 @@ export class AnalyticsService {
         resolutionStatus,
         call: call && {
           id: call.id,
+          title: call.title,
           description: call.description,
           outcome: call.outcome,
           resolvedAt: call.resolvedAt ?? null,
