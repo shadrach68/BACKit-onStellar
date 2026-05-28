@@ -7,6 +7,7 @@ import { PlatformSettings } from './entities/platform-settings.entity';
 import { retryWithBackoff } from '../utils/retry';
 import { ConfigService } from '../config/config.service';
 import { parseAdminParamsChanged } from './parsers/admin-params.parser';
+import { PayoutsService } from '../payouts/payouts.service';
 
 @Injectable()
 export class IndexerService {
@@ -20,6 +21,7 @@ export class IndexerService {
     @InjectRepository(PlatformSettings)
     private readonly platformSettingsRepository: Repository<PlatformSettings>,
     private readonly configService: ConfigService,
+    private readonly payoutsService: PayoutsService,
   ) {}
 
   // ─── Status ───────────────────────────────────────────────────────────────
@@ -98,6 +100,9 @@ export class IndexerService {
       case 'AdminParamsChanged':
         await this.handleAdminParamsChanged(topics, data, txHash, ledger);
         break;
+      case 'PayoutClaimed':
+        await this.handlePayoutClaimed(topics, txHash, ledger);
+        break;
 
       // ── extend here as you add more contract events ───────────────────
       // case 'MarketCreated':  await this.handleMarketCreated(...); break;
@@ -140,6 +145,28 @@ export class IndexerService {
         timestamp: new Date(),
       }),
     );
+  }
+
+  private async handlePayoutClaimed(
+    topics: xdr.ScVal[],
+    txHash: string,
+    ledger: number,
+  ): Promise<void> {
+    try {
+      const callId = topics[1]?.u64()?.toString() ?? '';
+      const stakerAddress = topics[2]?.str()?.toString() ?? '';
+      if (!callId || !stakerAddress) return;
+
+      await this.payoutsService.markClaimed(
+        callId,
+        stakerAddress,
+        txHash,
+        new Date(),
+      );
+      this.logger.log(`PayoutClaimed synced: call=${callId} staker=${stakerAddress}`);
+    } catch (err: any) {
+      this.logger.warn(`Failed to parse PayoutClaimed event: ${err.message}`);
+    }
   }
 
   // ─── Platform Settings ────────────────────────────────────────────────────
