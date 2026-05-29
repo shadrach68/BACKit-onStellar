@@ -1,8 +1,9 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, token, Address, Bytes, Env, Vec};
+use soroban_sdk::{contract, contractimpl, panic_with_error, token, Address, Bytes, Env, Vec};
 
 mod admin;
+mod errors;
 mod events;
 mod storage;
 mod types;
@@ -10,23 +11,28 @@ mod types;
 #[cfg(test)]
 mod test;
 
+use errors::CallRegistryError;
 use events::*;
 use storage::*;
 use types::*;
 
 const MAX_CALL_PAGE_SIZE: u32 = 20;
 
-/// CallRegistry contract implementation
-/// Manages prediction calls and staking on market outcomes
+/// CallRegistry contract implementation.
+/// Manages prediction calls and staking on market outcomes.
 #[contract]
 pub struct CallRegistry;
 
 #[contractimpl]
 impl CallRegistry {
-    /// Initialize the contract with admin and outcome manager
-    pub fn initialize(env: Env, admin: Address, outcome_manager: Address) {
-        if let Some(_) = get_config(&env) {
-            panic!("Contract already initialized");
+    
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        outcome_manager: Address,
+    ) -> Result<(), CallRegistryError> {
+        if get_config(&env).is_some() {
+            return Err(CallRegistryError::AlreadyInitialized);
         }
 
         admin.require_auth();
@@ -42,9 +48,16 @@ impl CallRegistry {
 
         env.events()
             .publish(("call_registry", "initialized"), (admin, outcome_manager));
+
+        Ok(())
     }
 
-    /// Create a new prediction call
+   
+
+    /// Create a new prediction call.
+    /// # Errors
+    /// * [`CallRegistryError::InvalidStakeAmount`] – `stake_amount` ≤ 0.
+    /// * [`CallRegistryError::InvalidEndTime`] – `end_ts` is not in the future.
     pub fn create_call(
         env: Env,
         creator: Address,
@@ -54,16 +67,16 @@ impl CallRegistry {
         token_address: Address,
         pair_id: Bytes,
         ipfs_cid: Bytes,
-    ) -> Call {
+    ) -> Result<Call, CallRegistryError> {
         creator.require_auth();
 
         if stake_amount <= 0 {
-            panic!("Stake amount must be positive");
+            return Err(CallRegistryError::InvalidStakeAmount);
         }
 
         let current_timestamp = env.ledger().timestamp();
         if end_ts <= current_timestamp {
-            panic!("End timestamp must be in the future");
+            return Err(CallRegistryError::InvalidEndTime);
         }
 
         let call_id = next_call_id(&env);
@@ -103,48 +116,46 @@ impl CallRegistry {
             &ipfs_cid,
         );
 
-        call
+        Ok(call)
     }
 
-    /// Add stake to an existing call
+    /// Add stake to an existing call.
+    /// # Errors
+    /// * [`CallRegistryError::InvalidStakeAmount`] – `amount` ≤ 0.
+    /// * [`CallRegistryError::CallNotFound`]       – `call_id` does not exist.
+    /// * [`CallRegistryError::CallEnded`]           – call's `end_ts` has passed.
+    /// * [`CallRegistryError::CallSettled`]         – call is already settled.
+    /// * [`CallRegistryError::InvalidPosition`]     – `position` ∉ {1, 2}.
     pub fn stake_on_call(
         env: Env,
         staker: Address,
         call_id: u64,
         amount: i128,
         position: u32,
-    ) -> Call {
+    ) -> Result<Call, CallRegistryError> {
         staker.require_auth();
 
         if amount <= 0 {
-            panic!("Stake amount must be positive");
+            return Err(CallRegistryError::InvalidStakeAmount);
         }
 
-        let mut call = match get_call(&env, call_id) {
-            Some(c) => c,
-            None => panic!("Call does not exist"),
-        };
+        let mut call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
 
         let current_timestamp = env.ledger().timestamp();
         if current_timestamp >= call.end_ts {
-            panic!("Call has ended");
+            return Err(CallRegistryError::CallEnded);
         }
 
         if call.settled {
-            panic!("Call has been settled");
+            return Err(CallRegistryError::CallSettled);
         }
 
-        let stake_position = match StakePosition::from_u32(position) {
-            Some(p) => p,
-            None => panic!("Invalid position: must be 1 (UP) or 2 (DOWN)"),
-        };
+        let stake_position =
+            StakePosition::from_u32(position).ok_or(CallRegistryError::InvalidPosition)?;
 
         let token_client = token::Client::new(&env, &call.stake_token);
         token_client.transfer(&staker, &env.current_contract_address(), &amount);
 
-        // We rely on events for attribution. The indexer already handles this.
-        // Hence call.up_stakes.set(...) / call.down_stakes.set(...) are commented out;
-        // uncomment in the future if the rule changes.
         match stake_position {
             StakePosition::Up => {
                 let current_stake = call.up_stakes.get(staker.clone()).unwrap_or(0);
@@ -164,18 +175,119 @@ impl CallRegistry {
 
         emit_stake_added(&env, call_id, &staker, amount, position);
 
-        call
+        Ok(call)
     }
 
-    /// Get call data by ID
-    pub fn get_call(env: Env, call_id: u64) -> Call {
-        match get_call(&env, call_id) {
-            Some(call) => call,
-            None => panic!("Call does not exist"),
+    /// Resolve a call with an outcome (outcome_manager only).
+    /// # Errors
+    /// * [`CallRegistryError::NotInitialized`] – contract not initialised.
+    /// * [`CallRegistryError::CallNotFound`]   – `call_id` does not exist.
+    /// * [`CallRegistryError::InvalidOutcome`] – `outcome` ∉ {1, 2}.
+    /// * [`CallRegistryError::CallNotEnded`]   – `end_ts` has not yet passed.
+    pub fn resolve_call(
+        env: Env,
+        call_id: u64,
+        outcome: u32,
+        end_price: i128,
+    ) -> Result<Call, CallRegistryError> {
+        let config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
+        config.outcome_manager.require_auth();
+
+        let mut call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
+
+        if outcome != 1 && outcome != 2 {
+            return Err(CallRegistryError::InvalidOutcome);
         }
+
+        let current_timestamp = env.ledger().timestamp();
+        if current_timestamp < call.end_ts {
+            return Err(CallRegistryError::CallNotEnded);
+        }
+
+        call.outcome = outcome;
+        call.end_price = end_price;
+
+        set_call(&env, &call);
+        extend_storage_ttl(&env);
+
+        emit_call_resolved(&env, call_id, outcome, end_price);
+
+        Ok(call)
     }
 
-    /// Get all calls created by a specific address
+    /// Mark a call as settled (outcome_manager only).
+    /// # Errors
+    /// * [`CallRegistryError::NotInitialized`] – contract not initialised.
+    /// * [`CallRegistryError::CallNotFound`]   – `call_id` does not exist.
+    /// * [`CallRegistryError::CallSettled`]     – call is already settled.
+    pub fn mark_settled(env: Env, call_id: u64) -> Result<(), CallRegistryError> {
+        let config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
+        config.outcome_manager.require_auth();
+
+        let mut call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
+
+        if call.settled {
+            return Err(CallRegistryError::CallSettled);
+        }
+
+        call.settled = true;
+        set_call(&env, &call);
+
+        Ok(())
+    }
+
+    /// Release escrowed tokens to a recipient (outcome_manager only).
+    /// # Errors
+    /// * [`CallRegistryError::NotInitialized`] – contract not initialised.
+    /// * [`CallRegistryError::CallNotFound`]   – `call_id` does not exist.
+    pub fn release_escrow(
+        env: Env,
+        call_id: u64,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), CallRegistryError> {
+        let config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
+        config.outcome_manager.require_auth();
+
+        let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
+
+        let token_client = token::Client::new(&env, &call.stake_token);
+        token_client.transfer(&env.current_contract_address(), &to, &amount);
+
+        Ok(())
+    }
+
+    /// Transfer admin privileges to a new address (admin only).
+    /// # Errors
+    /// Propagates errors from [`admin::set_admin`].
+    pub fn set_admin(env: Env, new_admin: Address) -> Result<(), CallRegistryError> {
+        admin::set_admin(env, new_admin)
+    }
+
+    /// Replace the outcome manager (admin only).
+    /// # Errors
+    /// Propagates errors from [`admin::set_outcome_manager`].
+    pub fn set_outcome_manager(env: Env, new_manager: Address) -> Result<(), CallRegistryError> {
+        admin::set_outcome_manager(env, new_manager)
+    }
+
+    /// Set the protocol fee in basis points, e.g. 100 = 1 % (admin only).
+    /// # Errors
+    /// Propagates errors from [`admin::set_fee`].
+    pub fn set_fee(env: Env, new_fee_bps: u32) -> Result<(), CallRegistryError> {
+        admin::set_fee(env, new_fee_bps)
+    }
+
+    pub fn get_config(env: Env) -> Result<ContractConfig, CallRegistryError> {
+        get_config(&env).ok_or(CallRegistryError::NotInitialized)
+    }
+    /// # Errors
+    /// * [`CallRegistryError::CallNotFound`] – `call_id` does not exist.
+    pub fn get_call(env: Env, call_id: u64) -> Result<Call, CallRegistryError> {
+        get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)
+    }
+
+    /// Get all calls created by a specific address (unbounded scan — prefer paginated variant).
     pub fn get_calls_by_creator(env: Env, creator: Address) -> Vec<Call> {
         let mut calls = Vec::new(&env);
         let total_calls = get_call_counter(&env);
@@ -192,7 +304,6 @@ impl CallRegistry {
     }
 
     /// Get a paginated slice of calls starting at `start_id`.
-    /// Returns up to `limit` calls and enforces a maximum page size.
     pub fn get_calls_paginated(env: Env, start_id: u64, limit: u32) -> Vec<Call> {
         let mut calls = Vec::new(&env);
         let total_calls = get_call_counter(&env);
@@ -217,7 +328,6 @@ impl CallRegistry {
     }
 
     /// Get a paginated slice of calls created by a specific address.
-    /// Returns up to `limit` calls starting from `start_id`.
     pub fn get_calls_by_creator_paginated(
         env: Env,
         creator: Address,
@@ -248,23 +358,22 @@ impl CallRegistry {
         calls
     }
 
-    /// Get statistics for a specific call
-    pub fn get_call_stats(env: Env, call_id: u64) -> CallStats {
-        let call = match get_call(&env, call_id) {
-            Some(c) => c,
-            None => panic!("Call does not exist"),
-        };
+    /// Get statistics for a specific call.
+    /// # Errors
+    /// * [`CallRegistryError::CallNotFound`] – `call_id` does not exist.
+    pub fn get_call_stats(env: Env, call_id: u64) -> Result<CallStats, CallRegistryError> {
+        let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
 
-        CallStats {
+        Ok(CallStats {
             total_up_stake: call.total_up_stake,
             total_down_stake: call.total_down_stake,
             total_stakes: call.up_stakes.len() + call.down_stakes.len(),
             up_stake_count: call.up_stakes.len(),
             down_stake_count: call.down_stakes.len(),
-        }
+        })
     }
 
-    /// Get all calls a staker has participated in
+    /// Get all calls a staker has participated in.
     pub fn get_staker_calls(env: Env, staker: Address) -> Vec<Call> {
         let call_ids = get_staker_calls(&env, &staker);
         let mut calls = Vec::new(&env);
@@ -278,109 +387,27 @@ impl CallRegistry {
         calls
     }
 
-    /// Resolve a call with an outcome (outcome_manager only)
-    pub fn resolve_call(env: Env, call_id: u64, outcome: u32, end_price: i128) -> Call {
-        let config = match get_config(&env) {
-            Some(c) => c,
-            None => panic!("Contract not initialized"),
-        };
-
-        config.outcome_manager.require_auth();
-
-        let mut call = match get_call(&env, call_id) {
-            Some(c) => c,
-            None => panic!("Call does not exist"),
-        };
-
-        if outcome != 1 && outcome != 2 {
-            panic!("Invalid outcome: must be 1 (UP) or 2 (DOWN)");
-        }
-
-        let current_timestamp = env.ledger().timestamp();
-        if current_timestamp < call.end_ts {
-            panic!("Call has not ended yet");
-        }
-
-        call.outcome = outcome;
-        call.end_price = end_price;
-
-        set_call(&env, &call);
-        extend_storage_ttl(&env);
-
-        emit_call_resolved(&env, call_id, outcome, end_price);
-
-        call
-    }
-
-    /// Transfer admin privileges to a new address (admin only).
-    /// Emits AdminParamsChanged { param: "admin", ... }.
-    pub fn set_admin(env: Env, new_admin: Address) {
-        admin::set_admin(env, new_admin);
-    }
-
-    /// Replace the outcome manager (admin only).
-    /// Emits AdminParamsChanged { param: "outcome_manager", ... }.
-    pub fn set_outcome_manager(env: Env, new_manager: Address) {
-        admin::set_outcome_manager(env, new_manager);
-    }
-
-    /// Set the protocol fee in basis points, e.g. 100 = 1 % (admin only).
-    /// Emits AdminParamsChanged { param: "fee_bps", ... }.
-    ///
-    /// # Panics
-    /// * `new_fee_bps` > 10_000
-    pub fn set_fee(env: Env, new_fee_bps: u32) {
-        admin::set_fee(env, new_fee_bps);
-    }
-
-    /// Get current contract configuration
-    pub fn get_config(env: Env) -> ContractConfig {
-        match get_config(&env) {
-            Some(c) => c,
-            None => panic!("Contract not initialized"),
-        }
-    }
-
-    /// Get total number of calls created
-    pub fn get_call_count(env: Env) -> u64 {
-        get_call_counter(&env)
-    }
-
-    /// Get staker's stake amount on a specific call for a position
-    pub fn get_staker_stake(env: Env, call_id: u64, staker: Address, position: u32) -> i128 {
-        let call = match get_call(&env, call_id) {
-            Some(c) => c,
-            None => panic!("Call does not exist"),
-        };
+    /// Get the stake amount a staker has on a specific call position.
+    ///  # Errors
+    /// * [`CallRegistryError::CallNotFound`]   – `call_id` does not exist.
+    /// * [`CallRegistryError::InvalidPosition`] – `position` ∉ {1, 2}.
+    pub fn get_staker_stake(
+        env: Env,
+        call_id: u64,
+        staker: Address,
+        position: u32,
+    ) -> Result<i128, CallRegistryError> {
+        let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
 
         match position {
-            1 => call.up_stakes.get(staker).unwrap_or(0),
-            2 => call.down_stakes.get(staker).unwrap_or(0),
-            _ => panic!("Invalid position"),
+            1 => Ok(call.up_stakes.get(staker).unwrap_or(0)),
+            2 => Ok(call.down_stakes.get(staker).unwrap_or(0)),
+            _ => Err(CallRegistryError::InvalidPosition),
         }
     }
 
-    pub fn release_escrow(env: Env, call_id: u64, to: Address, amount: i128) {
-        let config = get_config(&env).expect("Not initialized");
-        config.outcome_manager.require_auth();
-
-        let call = get_call(&env, call_id).expect("Call not found");
-
-        let token_client = token::Client::new(&env, &call.stake_token);
-        token_client.transfer(&env.current_contract_address(), &to, &amount);
-    }
-
-    pub fn mark_settled(env: Env, call_id: u64) {
-        let config = get_config(&env).expect("Not initialized");
-        config.outcome_manager.require_auth();
-
-        let mut call = get_call(&env, call_id).expect("Call not found");
-
-        if call.settled {
-            panic!("Already settled");
-        }
-
-        call.settled = true;
-        set_call(&env, &call);
+    /// Get total number of calls created.
+    pub fn get_call_count(env: Env) -> u64 {
+        get_call_counter(&env)
     }
 }
