@@ -6,12 +6,14 @@ mod storage;
 mod test;
 mod verification;
 
-use soroban_sdk::{
-    contract, contractimpl, symbol_short, Address, BytesN, Env, IntoVal, Map, Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, IntoVal, Map, Symbol, Vec};
 
 use auth::require_admin;
-use events::{emit_fee_collected, emit_outcome_finalized, emit_outcome_submitted, emit_payout_claimed};
+use backit_shared::{is_valid_fee_bps, is_valid_outcome};
+use events::{
+    emit_batch_payout_started, emit_fee_collected, emit_outcome_finalized, emit_outcome_submitted,
+    emit_payout_claimed,
+};
 use storage::{InstanceKey, Outcome, SignedOutcome, TempKey};
 use verification::{build_message, verify_signature};
 
@@ -83,7 +85,7 @@ impl OutcomeManager {
         if quorum == 0 || quorum > oracles.len() as u32 {
             panic!("invalid quorum");
         }
-        if fee_bps > 10000 {
+        if !is_valid_fee_bps(fee_bps) {
             panic!("invalid fee_bps");
         }
 
@@ -100,9 +102,7 @@ impl OutcomeManager {
         env.storage()
             .instance()
             .set(&InstanceKey::FeeCollector, &fee_collector);
-        env.storage()
-            .instance()
-            .set(&InstanceKey::FeeBps, &fee_bps);
+        env.storage().instance().set(&InstanceKey::FeeBps, &fee_bps);
     }
 
     // ── Admin Controls ─────────────────────────────────────────────────────────
@@ -182,7 +182,7 @@ impl OutcomeManager {
         }
 
         // 4. Validate outcome range
-        if signed.outcome != 1 && signed.outcome != 2 {
+        if !is_valid_outcome(signed.outcome) {
             panic!("invalid outcome: must be 1 (UP) or 2 (DOWN)");
         }
 
@@ -359,6 +359,133 @@ impl OutcomeManager {
         registry_release_escrow(&env, &registry, call_id, &staker, payout);
 
         emit_payout_claimed(&env, call_id, &staker, payout);
+    }
+
+    /// Batch-settle payouts for multiple winning stakers in a single transaction.
+    ///
+    /// Admin-only. Each staker in `stakers` is matched positionally with the
+    /// corresponding amount in `stakes`. Both vecs must be the same length.
+    ///
+    /// Individual `PayoutClaimed` events are emitted for each staker.
+    /// Already-claimed stakers cause the entire batch to panic — callers must
+    /// filter them out beforehand using `has_claimed`.
+    ///
+    /// # Panics
+    /// - `not admin`                 – caller is not the contract admin
+    /// - `call not settled`          – quorum not yet reached for this call
+    /// - `empty batch`               – stakers vec is empty
+    /// - `length mismatch`           – stakers and stakes vecs differ in length
+    /// - `invalid total winning`     – total_winning_stake ≤ 0
+    /// - `already claimed: <staker>` – a staker in the batch already claimed
+    /// - `nothing to claim`          – a staker's stake amount is ≤ 0
+    pub fn batch_claim_payouts(
+        env: Env,
+        registry: Address,
+        call_id: u64,
+        stakers: Vec<Address>,
+        stakes: Vec<i128>,
+        total_winning_stake: i128,
+        total_losing_stake: i128,
+    ) {
+        // 1. Admin only
+        require_admin(&env);
+
+        // 2. Verify the call is settled
+        if !env
+            .storage()
+            .instance()
+            .has(&InstanceKey::FinalOutcome(call_id))
+        {
+            panic!("call not settled");
+        }
+
+        // 3. Reject empty batches
+        if stakers.is_empty() {
+            panic!("empty batch");
+        }
+
+        // 4. Vecs must be same length
+        if stakers.len() != stakes.len() {
+            panic!("length mismatch");
+        }
+
+        // 5. Validate shared inputs once
+        if total_winning_stake <= 0 {
+            panic!("invalid total winning stake");
+        }
+
+        // 6. Load fee config once
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&InstanceKey::FeeBps)
+            .unwrap_or(0);
+        let fee_collector: Address = env
+            .storage()
+            .instance()
+            .get(&InstanceKey::FeeCollector)
+            .expect("fee collector not set");
+
+        // Pre-compute shared fee values
+        let total_fee = (total_losing_stake as i128)
+            .checked_mul(fee_bps as i128)
+            .expect("overflow in fee calculation")
+            .checked_div(10000)
+            .expect("division by zero");
+
+        let net_losing = total_losing_stake
+            .checked_sub(total_fee)
+            .expect("underflow in net losing");
+
+        emit_batch_payout_started(&env, call_id, stakers.len());
+
+        // 7. Process each staker
+        for i in 0..stakers.len() {
+            let staker = stakers.get(i).unwrap();
+            let staker_winning_stake = stakes.get(i).unwrap();
+
+            if staker_winning_stake <= 0 {
+                panic!("nothing to claim");
+            }
+
+            // Guard against duplicates within the batch and prior claims
+            let claimed_key = InstanceKey::Claimed(call_id, staker.clone());
+            if env.storage().instance().has(&claimed_key) {
+                panic!("already claimed");
+            }
+
+            // Staker's proportional fee share
+            let staker_fee_share = staker_winning_stake
+                .checked_mul(total_fee)
+                .expect("overflow in staker fee share")
+                .checked_div(total_winning_stake)
+                .expect("division by zero");
+
+            // Pro-rata payout from net losing pool
+            let prize_share = staker_winning_stake
+                .checked_mul(net_losing)
+                .expect("overflow in prize calculation")
+                .checked_div(total_winning_stake)
+                .expect("division by zero");
+
+            let payout = staker_winning_stake
+                .checked_add(prize_share)
+                .expect("overflow in payout sum");
+
+            // Mark claimed BEFORE external calls (reentrancy guard)
+            env.storage().instance().set(&claimed_key, &true);
+
+            // Transfer fee share
+            if staker_fee_share > 0 {
+                registry_release_escrow(&env, &registry, call_id, &fee_collector, staker_fee_share);
+                emit_fee_collected(&env, call_id, staker_fee_share, &fee_collector);
+            }
+
+            // Release payout to staker
+            registry_release_escrow(&env, &registry, call_id, &staker, payout);
+
+            emit_payout_claimed(&env, call_id, &staker, payout);
+        }
     }
 
     // ── Settlement Finalization ─────────────────────────────────────────────────

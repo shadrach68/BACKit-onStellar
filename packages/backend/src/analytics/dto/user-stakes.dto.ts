@@ -33,6 +33,9 @@ export class CallSummaryDto {
   id: string;
 
   @ApiProperty()
+  title: string;
+
+  @ApiProperty()
   description: string;
 
   @ApiProperty({ enum: ['YES', 'NO', 'PENDING'] })

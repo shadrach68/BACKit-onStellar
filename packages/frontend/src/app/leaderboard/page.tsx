@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useWalletContext } from "@/components/WalletContext";
+import LeaderboardSkeleton from "@/components/skeletons/LeaderboardSkeleton";
 
 type Period = "weekly" | "monthly" | "all-time";
 
@@ -81,11 +82,7 @@ export default function LeaderboardPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-3">
-          {[...Array(5)].map((_, idx) => (
-            <div key={idx} className="h-16 animate-pulse rounded-xl bg-gray-100" />
-          ))}
-        </div>
+        <LeaderboardSkeleton />
       ) : rows.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-10 text-center text-gray-600">
           No leaderboard entries yet.

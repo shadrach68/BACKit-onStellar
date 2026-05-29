@@ -41,3 +41,11 @@ pub fn emit_fee_collected(
         (call_id, fee_amount, fee_collector.clone()),
     );
 }
+
+/// Emitted once at the start of a batch settlement
+pub fn emit_batch_payout_started(env: &Env, call_id: u64, staker_count: u32) {
+    env.events().publish(
+        (symbol_short!("payout"), symbol_short!("batch")),
+        (call_id, staker_count),
+    );
+}

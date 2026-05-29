@@ -51,6 +51,8 @@ pub struct Call {
     pub settled: bool,
     /// Creation timestamp
     pub created_at: u64,
+    /// Whether the call has been cancelled by its creator
+    pub cancelled: bool,
 }
 
 /// Enum representing stake positions on a call
@@ -90,6 +92,18 @@ pub struct ContractConfig {
     pub outcome_manager: Address,
     /// Protocol fee in basis points (e.g. 100 = 1%). Default: 0.
     pub fee_bps: u32,
+    /// Maximum stake any single user may place per call per position.
+    /// `0` means unlimited.
+    pub max_stake_per_user: i128,
+}
+
+/// Contract-wide aggregated statistics for dashboards.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlobalStats {
+    pub total_calls: u64,
+    pub total_stake_volume: i128,
+    pub total_unique_stakers: u64,
 }
 
 /// Statistics for a call

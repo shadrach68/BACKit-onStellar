@@ -155,6 +155,8 @@ export class UsersService {
 
     const reliability =
       await this.analyticsService.calculatePredictorReliability(user.id);
+    const reputationScore =
+      await this.analyticsService.calculateReputationScore(walletAddress);
     const [followerCount, followingCount] = await Promise.all([
       this.followsRepo.count({ where: { followingAddress: walletAddress } }),
       this.followsRepo.count({ where: { followerAddress: walletAddress } }),
@@ -163,6 +165,7 @@ export class UsersService {
     return {
       ...user,
       predictorReliability: reliability,
+      reputationScore,
       followerCount,
       followingCount,
     };

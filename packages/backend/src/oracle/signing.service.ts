@@ -2,13 +2,18 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Keypair } from '@stellar/stellar-sdk';
 import * as nacl from 'tweetnacl';
+import { OracleOperationType } from './entities/oracle-health-log.entity';
+import { OracleHealthService } from './oracle-health.service';
 
 @Injectable()
 export class SigningService {
   private readonly logger = new Logger(SigningService.name);
   private readonly oracleKeypair: Keypair;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private readonly oracleHealthService: OracleHealthService,
+  ) {
     const secretKey = this.configService.get<string>('ORACLE_SECRET_KEY');
     if (!secretKey) {
       this.logger.warn(
@@ -44,6 +49,8 @@ export class SigningService {
     outcome: string;
     pairAddress: string;
   }): string {
+    const submissionTime = new Date();
+
     try {
       // Construct canonical message matching contract format (from ARCHITECTURE.md)
       // Format: "BACKit:Outcome:{call_id}:{outcome}:{final_price}:{timestamp}"
@@ -77,9 +84,28 @@ export class SigningService {
         this.oracleKeypair.rawSecretKey(),
       );
 
-      return Buffer.from(signature).toString('hex');
+      const signed = Buffer.from(signature).toString('hex');
+      void this.oracleHealthService.recordOperation({
+        oracleKey: this.getPublicKey(),
+        callId: data.callId,
+        operation: OracleOperationType.SIGN,
+        submissionTime,
+        priceFetched: data.price,
+        success: true,
+      });
+
+      return signed;
     } catch (error) {
       this.logger.error('Error signing outcome:', error);
+      void this.oracleHealthService.recordOperation({
+        oracleKey: this.getPublicKey(),
+        callId: data.callId,
+        operation: OracleOperationType.SIGN,
+        submissionTime,
+        priceFetched: data.price,
+        success: false,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }

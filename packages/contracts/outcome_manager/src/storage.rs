@@ -51,7 +51,9 @@ pub enum TempKey {
 
 /// Store the CallRegistry address in instance storage.
 pub fn set_registry(env: &Env, registry: Address) {
-    env.storage().instance().set(&InstanceKey::Registry, &registry);
+    env.storage()
+        .instance()
+        .set(&InstanceKey::Registry, &registry);
 }
 
 /// Read the stored CallRegistry address; panics if not set.

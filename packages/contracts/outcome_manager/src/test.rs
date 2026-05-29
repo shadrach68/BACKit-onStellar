@@ -3,10 +3,10 @@
 use soroban_sdk::{
     contract, contractimpl,
     testutils::{Address as _, Ledger},
-    Address, Bytes, BytesN, Env, Symbol, Vec,
+    Address, BytesN, Env, Vec,
 };
 
-use crate::storage::{Outcome, SignedOutcome};
+use crate::storage::SignedOutcome;
 use crate::{OutcomeManager, OutcomeManagerClient};
 
 // ─── Test Helpers ─────────────────────────────────────────────────────────────
@@ -361,14 +361,7 @@ fn test_fee_deducted_from_payout() {
     let (_, registry_id, client) = setup_with_fee(&env, 500);
     let staker = Address::generate(&env);
 
-    client.claim_payout(
-        &registry_id,
-        &1u64,
-        &staker,
-        &100i128,
-        &100i128,
-        &100i128,
-    );
+    client.claim_payout(&registry_id, &1u64, &staker, &100i128, &100i128, &100i128);
     // If no panic, payout was computed and released correctly
 }
 
@@ -380,14 +373,7 @@ fn test_zero_fee_full_payout() {
     let (_, registry_id, client) = setup_with_fee(&env, 0);
     let staker = Address::generate(&env);
 
-    client.claim_payout(
-        &registry_id,
-        &1u64,
-        &staker,
-        &50i128,
-        &100i128,
-        &100i128,
-    );
+    client.claim_payout(&registry_id, &1u64, &staker, &50i128, &100i128, &100i128);
 }
 
 #[test]
@@ -420,14 +406,7 @@ fn test_fee_goes_to_correct_address() {
     let staker = Address::generate(&env);
 
     // Should not panic; MockRegistry records calls but we verify no panic = correct flow
-    client.claim_payout(
-        &registry_id,
-        &1u64,
-        &staker,
-        &100i128,
-        &100i128,
-        &100i128,
-    );
+    client.claim_payout(&registry_id, &1u64, &staker, &100i128, &100i128, &100i128);
     // fee_collector address was set during setup_with_fee; contract uses it internally
     let _ = fee_collector; // referenced to confirm it was set
 }
@@ -447,4 +426,140 @@ fn test_invalid_fee_bps_panics() {
     let mut oracles = Vec::new(&env);
     oracles.push_back(pubkey);
     client.initialize(&admin, &oracles, &1u32, &fee_collector, &10001u32);
+}
+
+// ─── Batch Payout Tests ────────────────────────────────────────────────────────
+
+#[test]
+fn test_batch_claim_payouts_three_stakers() {
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, 0);
+
+    let staker1 = Address::generate(&env);
+    let staker2 = Address::generate(&env);
+    let staker3 = Address::generate(&env);
+
+    let mut stakers = Vec::new(&env);
+    stakers.push_back(staker1.clone());
+    stakers.push_back(staker2.clone());
+    stakers.push_back(staker3.clone());
+
+    let mut stakes = Vec::new(&env);
+    stakes.push_back(50_i128);
+    stakes.push_back(30_i128);
+    stakes.push_back(20_i128);
+
+    // Should not panic — all three processed in one tx
+    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &100_i128, &100_i128);
+
+    assert!(client.has_claimed(&1u64, &staker1));
+    assert!(client.has_claimed(&1u64, &staker2));
+    assert!(client.has_claimed(&1u64, &staker3));
+}
+
+#[test]
+#[should_panic(expected = "already claimed")]
+fn test_batch_claim_panics_on_duplicate_staker() {
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, 0);
+
+    let staker = Address::generate(&env);
+
+    // First batch — marks staker as claimed
+    let mut stakers = Vec::new(&env);
+    stakers.push_back(staker.clone());
+    let mut stakes = Vec::new(&env);
+    stakes.push_back(50_i128);
+
+    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &50_i128, &50_i128);
+
+    // Second batch with same staker — must panic
+    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &50_i128, &50_i128);
+}
+
+#[test]
+#[should_panic(expected = "empty batch")]
+fn test_batch_claim_panics_on_empty_batch() {
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, 0);
+
+    let stakers: Vec<Address> = Vec::new(&env);
+    let stakes: Vec<i128> = Vec::new(&env);
+
+    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &100_i128, &100_i128);
+}
+
+#[test]
+#[should_panic(expected = "length mismatch")]
+fn test_batch_claim_panics_on_length_mismatch() {
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, 0);
+
+    let mut stakers = Vec::new(&env);
+    stakers.push_back(Address::generate(&env));
+    stakers.push_back(Address::generate(&env));
+
+    let mut stakes = Vec::new(&env);
+    stakes.push_back(50_i128); // one fewer than stakers
+
+    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &100_i128, &50_i128);
+}
+
+#[test]
+#[should_panic(expected = "call not settled")]
+fn test_batch_claim_panics_on_unsettled_call() {
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, 0);
+
+    let mut stakers = Vec::new(&env);
+    stakers.push_back(Address::generate(&env));
+    let mut stakes = Vec::new(&env);
+    stakes.push_back(50_i128);
+
+    // call_id=999 was never finalized
+    client.batch_claim_payouts(&registry_id, &999u64, &stakers, &stakes, &50_i128, &50_i128);
+}
+
+#[test]
+fn test_batch_claim_with_fee_deducted() {
+    let env = Env::default();
+    // 10% fee
+    let (fee_collector, registry_id, client) = setup_with_fee(&env, 1000);
+
+    let staker1 = Address::generate(&env);
+    let staker2 = Address::generate(&env);
+
+    let mut stakers = Vec::new(&env);
+    stakers.push_back(staker1.clone());
+    stakers.push_back(staker2.clone());
+
+    let mut stakes = Vec::new(&env);
+    stakes.push_back(60_i128);
+    stakes.push_back(40_i128);
+
+    // Should process without panic; fee math mirrors claim_payout
+    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &100_i128, &100_i128);
+
+    assert!(client.has_claimed(&1u64, &staker1));
+    assert!(client.has_claimed(&1u64, &staker2));
+    let _ = fee_collector;
+}
+
+#[test]
+#[should_panic(expected = "already claimed")]
+fn test_batch_claim_duplicate_within_same_batch_panics() {
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, 0);
+
+    let staker = Address::generate(&env);
+
+    let mut stakers = Vec::new(&env);
+    stakers.push_back(staker.clone());
+    stakers.push_back(staker.clone());
+
+    let mut stakes = Vec::new(&env);
+    stakes.push_back(50_i128);
+    stakes.push_back(50_i128);
+
+    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &100_i128, &50_i128);
 }
