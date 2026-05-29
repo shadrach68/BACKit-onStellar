@@ -365,6 +365,60 @@ mod call_registry {
         assert_eq!(staker_calls.get(0).unwrap().id, call.id);
     }
 
+    // ── global stats ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_global_stats_increment() {
+        let (env, client, _admin, _om) = setup();
+        env.ledger().set_timestamp(1000);
+
+        let creator = Address::generate(&env);
+        let staker1 = Address::generate(&env);
+        let staker2 = Address::generate(&env);
+        let stake_token = env.register_contract(None, MockToken);
+        let token_address = Address::generate(&env);
+        let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
+        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+
+        let stats = client.get_global_stats();
+        assert_eq!(stats.total_calls, 0);
+        assert_eq!(stats.total_stake_volume, 0);
+        assert_eq!(stats.total_unique_stakers, 0);
+
+        let call1 = create_call_with_default_condition(
+            &client,
+            &creator,
+            &stake_token,
+            &100_000_000_i128,
+            &2000u64,
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+        );
+        let call2 = create_call_with_default_condition(
+            &client,
+            &creator,
+            &stake_token,
+            &100_000_000_i128,
+            &2000u64,
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+        );
+
+        let stats = client.get_global_stats();
+        assert_eq!(stats.total_calls, 2);
+
+        env.budget().reset_unlimited();
+        client.stake_on_call(&staker1, &call1.id, &50_000_000_i128, &1);
+        client.stake_on_call(&staker1, &call1.id, &20_000_000_i128, &1);
+        client.stake_on_call(&staker2, &call2.id, &30_000_000_i128, &2);
+
+        let stats = client.get_global_stats();
+        assert_eq!(stats.total_stake_volume, 100_000_000);
+        assert_eq!(stats.total_unique_stakers, 2);
+    }
+
     // ── create_call ───────────────────────────────────────────────────────────
 
     #[test]

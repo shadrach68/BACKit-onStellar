@@ -97,6 +97,15 @@ pub struct ContractConfig {
     pub max_stake_per_user: i128,
 }
 
+/// Contract-wide aggregated statistics for dashboards.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlobalStats {
+    pub total_calls: u64,
+    pub total_stake_volume: i128,
+    pub total_unique_stakers: u64,
+}
+
 /// Statistics for a call
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]

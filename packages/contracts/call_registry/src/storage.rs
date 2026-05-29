@@ -1,4 +1,4 @@
-use crate::types::{Call, ContractConfig};
+use crate::types::{Call, ContractConfig, GlobalStats};
 use soroban_sdk::{contracttype, Address, Env};
 
 // ~120 days in ledgers (5s per ledger): 120 * 24 * 3600 / 5 = 2_073_600
@@ -13,6 +13,8 @@ const INSTANCE_BUMP_AMOUNT: u32 = 120_960; // ~7 days
 pub enum DataKey {
     Config,
     CallCounter,
+    GlobalStats,
+    GlobalStakerSeen(Address),
     Call(u64),
     StakerCalls(Address),
 }
@@ -110,6 +112,36 @@ pub fn get_staker_calls(env: &Env, staker: &Address) -> soroban_sdk::Vec<u64> {
         );
     }
     result
+}
+
+pub fn get_global_stats(env: &Env) -> GlobalStats {
+    env.storage()
+        .instance()
+        .get(&DataKey::GlobalStats)
+        .unwrap_or(GlobalStats {
+            total_calls: 0,
+            total_stake_volume: 0,
+            total_unique_stakers: 0,
+        })
+}
+
+pub fn record_call_created(env: &Env) {
+    let mut stats = get_global_stats(env);
+    stats.total_calls += 1;
+    env.storage().instance().set(&DataKey::GlobalStats, &stats);
+}
+
+pub fn record_stake(env: &Env, staker: &Address, amount: i128) {
+    let mut stats = get_global_stats(env);
+    stats.total_stake_volume += amount;
+
+    let seen_key = DataKey::GlobalStakerSeen(staker.clone());
+    if !env.storage().persistent().has(&seen_key) {
+        env.storage().persistent().set(&seen_key, &true);
+        stats.total_unique_stakers += 1;
+    }
+
+    env.storage().instance().set(&DataKey::GlobalStats, &stats);
 }
 
 /// Get current call counter
