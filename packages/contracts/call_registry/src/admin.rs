@@ -80,6 +80,8 @@ pub fn set_fee(env: Env, new_fee_bps: u32) -> Result<(), CallRegistryError> {
     extend_storage_ttl(&env);
 
     emit_admin_params_changed_u32(&env, PARAM_FEE_BPS, &config.admin, old_fee_bps, new_fee_bps);
+
+    Ok(())
 }
 
 /// Set the maximum stake any single user may place per call per position.
