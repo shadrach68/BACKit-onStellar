@@ -133,8 +133,6 @@ impl CallRegistry {
             ipfs_cid: ipfs_cid.clone(),
             total_up_stake: 0,
             total_down_stake: 0,
-            up_stakes: soroban_sdk::Map::new(&env),
-            down_stakes: soroban_sdk::Map::new(&env),
             outcome: 0,
             start_price: 0,
             end_price: 0,
@@ -277,14 +275,9 @@ impl CallRegistry {
 
         // Per-user stake cap
         let config = get_config(&env).expect("Contract not initialized");
-        if config.max_stake_per_user > 0 {
-            let existing = match stake_position {
-                StakePosition::Up => call.up_stakes.get(staker.clone()).unwrap_or(0),
-                StakePosition::Down => call.down_stakes.get(staker.clone()).unwrap_or(0),
-            };
-            if existing + amount > config.max_stake_per_user {
-                panic!("Stake exceeds max_stake_per_user cap");
-            }
+        let current_stake = get_user_stake(&env, call_id, &staker, position);
+        if config.max_stake_per_user > 0 && current_stake + amount > config.max_stake_per_user {
+            panic!("Stake exceeds max_stake_per_user cap");
         }
 
         let token_client = token::Client::new(&env, &call.stake_token);
@@ -292,15 +285,21 @@ impl CallRegistry {
 
         match stake_position {
             StakePosition::Up => {
-                let current_stake = call.up_stakes.get(staker.clone()).unwrap_or(0);
-                call.up_stakes.set(staker.clone(), current_stake + amount);
-                call.total_up_stake += amount;
+            let new_stake = current_stake + amount;
+            if current_stake == 0 {
+                set_up_staker_count(&env, call_id, get_up_staker_count(&env, call_id) + 1);
             }
-            StakePosition::Down => {
-                let current_stake = call.down_stakes.get(staker.clone()).unwrap_or(0);
-                call.down_stakes.set(staker.clone(), current_stake + amount);
-                call.total_down_stake += amount;
+            set_user_stake(&env, call_id, &staker, position, new_stake);
+            call.total_up_stake += amount;
+        }
+        StakePosition::Down => {
+            let new_stake = current_stake + amount;
+            if current_stake == 0 {
+                set_down_staker_count(&env, call_id, get_down_staker_count(&env, call_id) + 1);
             }
+            set_user_stake(&env, call_id, &staker, position, new_stake);
+            call.total_down_stake += amount;
+        }
         }
 
         set_call(&env, &call);
@@ -533,13 +532,15 @@ impl CallRegistry {
     /// * [`CallRegistryError::CallNotFound`] – `call_id` does not exist.
     pub fn get_call_stats(env: Env, call_id: u64) -> Result<CallStats, CallRegistryError> {
         let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
+        let up_stake_count = get_up_staker_count(&env, call_id);
+        let down_stake_count = get_down_staker_count(&env, call_id);
 
         Ok(CallStats {
             total_up_stake: call.total_up_stake,
             total_down_stake: call.total_down_stake,
-            total_stakes: call.up_stakes.len() + call.down_stakes.len(),
-            up_stake_count: call.up_stakes.len(),
-            down_stake_count: call.down_stakes.len(),
+            total_stakes: up_stake_count + down_stake_count,
+            up_stake_count,
+            down_stake_count,
         })
     }
 
@@ -567,11 +568,12 @@ impl CallRegistry {
         staker: Address,
         position: u32,
     ) -> Result<i128, CallRegistryError> {
-        let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
+        // Just to verify call exists
+        get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
 
         match position {
-            OUTCOME_UP => Ok(call.up_stakes.get(staker).unwrap_or(0)),
-            OUTCOME_DOWN => Ok(call.down_stakes.get(staker).unwrap_or(0)),
+            OUTCOME_UP => Ok(get_user_stake(&env, call_id, &staker, position)),
+            OUTCOME_DOWN => Ok(get_user_stake(&env, call_id, &staker, position)),
             _ => Err(CallRegistryError::InvalidPosition),
         }
     }

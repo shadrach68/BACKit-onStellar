@@ -35,10 +35,6 @@ pub struct Call {
     pub total_up_stake: i128,
     /// Current total stake on DOWN position
     pub total_down_stake: i128,
-    /// Map of staker addresses to their stake amounts for UP position
-    pub up_stakes: Map<Address, i128>,
-    /// Map of staker addresses to their stake amounts for DOWN position
-    pub down_stakes: Map<Address, i128>,
     /// Resolved outcome: 0 = unresolved, 1 = UP, 2 = DOWN
     pub outcome: u32,
     /// Price at call creation
