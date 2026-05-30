@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, token, Address, Bytes, Env, Map, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, Map, Symbol, Vec};
 
 mod admin;
 mod errors;
@@ -18,6 +18,7 @@ use storage::*;
 use types::*;
 
 const MAX_CALL_PAGE_SIZE: u32 = 20;
+pub const CONTRACT_VERSION: u32 = 1;
 
 /// CallRegistry contract implementation.
 /// Manages prediction calls and staking on market outcomes.
@@ -78,6 +79,9 @@ impl CallRegistry {
         };
 
         set_config(&env, &config);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "version"), &CONTRACT_VERSION);
         extend_storage_ttl(&env);
 
         env.events()
@@ -600,5 +604,39 @@ impl CallRegistry {
     /// Get contract-wide aggregated statistics.
     pub fn get_global_stats(env: Env) -> GlobalStats {
         storage::get_global_stats(&env)
+    }
+
+    /// Return the current contract version.
+    pub fn version(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "version"))
+            .unwrap_or(CONTRACT_VERSION)
+    }
+
+    /// Upgrade the contract WASM to a new hash (admin only).
+    ///
+    /// # Errors
+    /// * [`CallRegistryError::NotInitialized`] -- contract not initialised.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), CallRegistryError> {
+        let config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
+        config.admin.require_auth();
+
+        let old_version: u32 = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "version"))
+            .unwrap_or(CONTRACT_VERSION);
+        let new_version = old_version + 1;
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "version"), &new_version);
+
+        emit_contract_upgraded(&env, old_version, new_version, &config.admin);
+
+        Ok(())
     }
 }

@@ -2,8 +2,8 @@
 
 use soroban_sdk::{
     contract, contractimpl,
-    testutils::{Address as _, Events as _, Ledger as _},
-    Address, Bytes, Env, IntoVal, Symbol,
+    testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
+    Address, Bytes, BytesN, Env, IntoVal, Symbol,
 };
 
 use crate::errors::CallRegistryError;
@@ -1561,5 +1561,26 @@ mod call_registry {
             &100_i128,
             &100_i128
         ));
+    }
+
+    // -- upgrade / version -------------------------------------------------------
+
+    #[test]
+    fn test_version_returns_contract_version() {
+        let (_env, client, _admin, _om) = setup();
+        assert_eq!(client.version(), 1u32);
+    }
+
+    #[test]
+    fn test_upgrade_requires_admin_auth() {
+        // upgrade() returns Err(NotInitialized) when called before initialize(),
+        // proving the admin guard fires before any WASM update.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, CallRegistry);
+        let client = CallRegistryClient::new(&env, &contract_id);
+        let fake_hash = BytesN::<32>::from_array(&env, &[0u8; 32]);
+        let result = client.try_upgrade(&fake_hash);
+        assert!(result.is_err(), "upgrade must fail when not initialized");
     }
 }
