@@ -690,3 +690,113 @@ fn test_om_upgrade_requires_admin_auth() {
     let fake_hash = BytesN::<32>::from_array(&env, &[0u8; 32]);
     client.upgrade(&fake_hash); // panics: "not initialized"
 }
+
+// -- Fuzz / property tests for claim_payout arithmetic -----------------------
+
+/// Create a fresh settled env and run claim_payout with the given inputs.
+/// Panics if any arithmetic overflows or the claim is not recorded.
+fn fuzz_claim_setup(staker_winning: i128, total_winning: i128, total_losing: i128, fee_bps: u32) {
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, fee_bps);
+    let staker = Address::generate(&env);
+    client.claim_payout(
+        &registry_id,
+        &1u64,
+        &staker,
+        &staker_winning,
+        &total_winning,
+        &total_losing,
+    );
+    assert!(client.has_claimed(&1u64, &staker));
+}
+
+#[test]
+fn test_fuzz_payout_many_ratios_no_panic() {
+    // Representative matrix of ratios; none should overflow or panic
+    let cases: &[(i128, i128, i128, u32)] = &[
+        // (staker_winning, total_winning, total_losing, fee_bps)
+        (1,              1,                  0,          0),
+        (1,              1,                  1,          0),
+        (1,              1,                  1,       1000),
+        (1,              1,                  1,       5000),
+        (1,          1_000,          1_000_000,        100),
+        (500,        1_000,          1_000_000,        500),
+        (1_000,      1_000,                  1,          0),
+        (1_000_000,  1_000_000,      1_000_000,      1_000),
+        (1,              1,  1_000_000_000_000,          0),
+        (1, 1_000_000_000_000, 1_000_000_000_000,        0),
+        (500,        1_000,              1_000,       5_000),
+    ];
+    for &(sw, tw, tl, fee) in cases {
+        fuzz_claim_setup(sw, tw, tl, fee);
+    }
+}
+
+#[test]
+fn test_fuzz_100_winners_batch_all_claimed() {
+    // 100 equal winners via batch_claim_payouts -- all must be marked claimed
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, 0);
+
+    let mut stakers = Vec::new(&env);
+    let mut stakes = Vec::new(&env);
+    for _ in 0..100u32 {
+        stakers.push_back(Address::generate(&env));
+        stakes.push_back(1_i128);
+    }
+
+    client.batch_claim_payouts(
+        &registry_id,
+        &1u64,
+        &stakers,
+        &stakes,
+        &100_i128,
+        &100_i128,
+    );
+
+    for i in 0..100u32 {
+        assert!(client.has_claimed(&1u64, &stakers.get(i).unwrap()));
+    }
+}
+
+#[test]
+fn test_fuzz_1_winner_takes_all() {
+    // Single winner holds the entire winning pool
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, 0);
+    let staker = Address::generate(&env);
+    client.claim_payout(
+        &registry_id,
+        &1u64,
+        &staker,
+        &1_000_000_i128,
+        &1_000_000_i128,
+        &1_000_000_i128,
+    );
+    assert!(client.has_claimed(&1u64, &staker));
+}
+
+#[test]
+fn test_fuzz_asymmetric_1_vs_1_trillion() {
+    // 1 unit winning vs enormous losing pool -- floor division must not overflow
+    fuzz_claim_setup(1, 1, 1_000_000_000_000, 0);
+}
+
+#[test]
+fn test_fuzz_asymmetric_1_trillion_vs_1() {
+    // Enormous winner stake vs tiny losing pool
+    fuzz_claim_setup(1_000_000_000_000, 1_000_000_000_000, 1, 0);
+}
+
+#[test]
+#[should_panic]
+fn test_fuzz_zero_staker_stake_panics() {
+    fuzz_claim_setup(0, 1, 1, 0);
+}
+
+#[test]
+#[should_panic]
+fn test_fuzz_zero_total_winning_panics() {
+    fuzz_claim_setup(1, 0, 1, 0);
+}
+
