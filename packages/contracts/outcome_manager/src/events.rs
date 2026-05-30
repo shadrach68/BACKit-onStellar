@@ -56,3 +56,17 @@ pub fn emit_outcome_disputed(env: &Env, call_id: u64, new_outcome: u32, new_pric
         (call_id, new_outcome, new_price),
     );
 }
+
+pub fn emit_contract_paused(env: &Env) {
+    env.events().publish(
+        (symbol_short!("contract"), symbol_short!("paused")),
+        (),
+    );
+}
+
+pub fn emit_contract_unpaused(env: &Env) {
+    env.events().publish(
+        (symbol_short!("contract"), symbol_short!("unpaused")),
+        (),
+    );
+}

@@ -12,9 +12,9 @@ use auth::require_admin;
 use backit_shared::{is_valid_fee_bps, is_valid_outcome};
 use events::{
     emit_batch_payout_started, emit_fee_collected, emit_outcome_disputed, emit_outcome_finalized,
-    emit_outcome_submitted, emit_payout_claimed,
+    emit_outcome_submitted, emit_payout_claimed, emit_contract_paused, emit_contract_unpaused,
 };
-use storage::{set_dispute_window, InstanceKey, Outcome, SignedOutcome, TempKey};
+use storage::{set_dispute_window, InstanceKey, Outcome, SignedOutcome, TempKey, is_paused, set_paused};
 use verification::{build_message, verify_signature};
 
 // ─── Cross-contract helpers ────────────────────────────────────────────────────
@@ -146,6 +146,28 @@ impl OutcomeManager {
             .set(&InstanceKey::Admin, &new_admin);
     }
 
+    /// Pause the contract (admin only).
+    /// When paused:
+    /// - submit_outcome() will fail
+    /// - claim_payout() will fail
+    /// - mark_settled() still works (admin needs to finalize outcomes)
+    pub fn pause(env: Env) {
+        require_admin(&env);
+        set_paused(&env, true);
+        emit_contract_paused(&env);
+    }
+
+    /// Unpause the contract (admin only).
+    pub fn unpause(env: Env) {
+        require_admin(&env);
+        set_paused(&env, false);
+        emit_contract_unpaused(&env);
+    }
+
+    pub fn is_paused_view(env: Env) -> bool {
+        is_paused(&env)
+    }
+
     // ── Oracle Submission ──────────────────────────────────────────────────────
 
     /// Accept a signed outcome report from a trusted oracle.
@@ -161,6 +183,11 @@ impl OutcomeManager {
     /// - `invalid outcome`        – outcome is not 1 (UP) or 2 (DOWN)
     /// - (ed25519_verify panics)  – signature is invalid; tx is reverted
     pub fn submit_outcome(env: Env, registry: Address, signed: SignedOutcome) {
+        // 0. Check if contract is paused (emergency guard)
+        if is_paused(&env) {
+            panic!("contract is paused");
+        }
+
         // 1. Validate oracle
         let oracles: Map<BytesN<32>, bool> =
             env.storage().instance().get(&InstanceKey::Oracles).unwrap();
@@ -280,6 +307,11 @@ impl OutcomeManager {
         total_winning_stake: i128,
         total_losing_stake: i128,
     ) {
+        // 0. Check if contract is paused (emergency guard)
+        if is_paused(&env) {
+            panic!("contract is paused");
+        }
+
         // 1. Require staker's authorization
         staker.require_auth();
 

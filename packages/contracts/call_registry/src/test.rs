@@ -1385,4 +1385,217 @@ mod call_registry {
             &100_i128
         ));
     }
+
+    // ── Creator Reputation Stats Tests ─────────────────────────────────────
+
+    #[test]
+    fn test_creator_stats_increment_on_create() {
+        let (env, admin, outcome_manager, creator) = create_test_env();
+        let contract_id = env.register_contract(None, CallRegistry);
+        let client = CallRegistryClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &outcome_manager, &TEST_MIN_STAKE);
+        env.ledger().set_timestamp(1000);
+
+        let stake_token = Address::generate(&env);
+        let token_address = Address::generate(&env);
+        let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
+        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+
+        // Creator starts with no stats
+        let stats = client.get_creator_stats_view(&creator);
+        assert_eq!(stats.total_created, 0);
+        assert_eq!(stats.total_resolved, 0);
+        assert_eq!(stats.total_correct, 0);
+
+        // Create first call
+        create_call_with_default_condition(
+            &client,
+            &creator,
+            &stake_token,
+            &100_000_000_i128,
+            &2000u64,
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+        );
+
+        let stats = client.get_creator_stats_view(&creator);
+        assert_eq!(stats.total_created, 1);
+        assert_eq!(stats.total_resolved, 0);
+        assert_eq!(stats.total_correct, 0);
+
+        // Create second call
+        create_call_with_default_condition(
+            &client,
+            &creator,
+            &stake_token,
+            &100_000_000_i128,
+            &3000u64,
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+        );
+
+        let stats = client.get_creator_stats_view(&creator);
+        assert_eq!(stats.total_created, 2);
+        assert_eq!(stats.total_resolved, 0);
+        assert_eq!(stats.total_correct, 0);
+    }
+
+    #[test]
+    fn test_creator_stats_resolved_and_correct_on_win() {
+        let (env, admin, outcome_manager, creator) = create_test_env();
+        let contract_id = env.register_contract(None, CallRegistry);
+        let client = CallRegistryClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &outcome_manager, &TEST_MIN_STAKE);
+        env.ledger().set_timestamp(1000);
+
+        let stake_token = env.register_contract(None, MockToken);
+        let token_address = Address::generate(&env);
+        let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
+        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+
+        client.whitelist_token(&stake_token);
+
+        // Creator creates a call
+        let _call = create_call_with_default_condition(
+            &client,
+            &creator,
+            &stake_token,
+            &100_000_000_i128,
+            &2000u64,
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+        );
+
+        // Creator stakes on UP position (winning side)
+        client.stake_on_call(&creator, &1u64, &50_000_000_i128, &1);
+
+        // Resolve as UP (creator staked on winning side)
+        env.ledger().set_timestamp(2100);
+        client.resolve_call(&1u64, &1u32, &150_000_000_i128);
+
+        let stats = client.get_creator_stats_view(&creator);
+        assert_eq!(stats.total_created, 1);
+        assert_eq!(stats.total_resolved, 1);
+        assert_eq!(stats.total_correct, 1);
+    }
+
+    #[test]
+    fn test_creator_stats_resolved_but_not_correct_on_loss() {
+        let (env, admin, outcome_manager, creator) = create_test_env();
+        let contract_id = env.register_contract(None, CallRegistry);
+        let client = CallRegistryClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &outcome_manager, &TEST_MIN_STAKE);
+        env.ledger().set_timestamp(1000);
+
+        let stake_token = env.register_contract(None, MockToken);
+        let token_address = Address::generate(&env);
+        let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
+        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+
+        client.whitelist_token(&stake_token);
+
+        // Creator creates a call
+        let _call = create_call_with_default_condition(
+            &client,
+            &creator,
+            &stake_token,
+            &100_000_000_i128,
+            &2000u64,
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+        );
+
+        // Creator stakes on UP (but outcome will be DOWN, so incorrect)
+        client.stake_on_call(&creator, &1u64, &50_000_000_i128, &1);
+
+        // Resolve as DOWN (creator staked on losing side)
+        env.ledger().set_timestamp(2100);
+        client.resolve_call(&1u64, &2u32, &50_000_000_i128);
+
+        let stats = client.get_creator_stats_view(&creator);
+        assert_eq!(stats.total_created, 1);
+        assert_eq!(stats.total_resolved, 1);
+        assert_eq!(stats.total_correct, 0);
+    }
+
+    #[test]
+    fn test_creator_stats_multiple_calls_mixed_outcomes() {
+        let (env, admin, outcome_manager, creator) = create_test_env();
+        let contract_id = env.register_contract(None, CallRegistry);
+        let client = CallRegistryClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &outcome_manager, &TEST_MIN_STAKE);
+        env.ledger().set_timestamp(1000);
+
+        let stake_token = env.register_contract(None, MockToken);
+        let token_address = Address::generate(&env);
+        let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
+        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+
+        client.whitelist_token(&stake_token);
+
+        // Create call 1 and creator stakes on UP
+        let _call1 = create_call_with_default_condition(
+            &client,
+            &creator,
+            &stake_token,
+            &100_000_000_i128,
+            &2000u64,
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+        );
+        client.stake_on_call(&creator, &1u64, &50_000_000_i128, &1);
+
+        // Create call 2 and creator stakes on DOWN
+        let _call2 = create_call_with_default_condition(
+            &client,
+            &creator,
+            &stake_token,
+            &100_000_000_i128,
+            &3000u64,
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+        );
+        client.stake_on_call(&creator, &2u64, &50_000_000_i128, &2);
+
+        // Create call 3 and creator stakes on UP
+        let _call3 = create_call_with_default_condition(
+            &client,
+            &creator,
+            &stake_token,
+            &100_000_000_i128,
+            &4000u64,
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+        );
+        client.stake_on_call(&creator, &3u64, &50_000_000_i128, &1);
+
+        // Resolve call 1 as UP (correct - creator staked UP)
+        env.ledger().set_timestamp(2100);
+        client.resolve_call(&1u64, &1u32, &150_000_000_i128);
+
+        // Resolve call 2 as UP (incorrect - creator staked DOWN)
+        env.ledger().set_timestamp(3100);
+        client.resolve_call(&2u64, &1u32, &150_000_000_i128);
+
+        // Resolve call 3 as UP (correct - creator staked UP)
+        env.ledger().set_timestamp(4100);
+        client.resolve_call(&3u64, &1u32, &150_000_000_i128);
+
+        let stats = client.get_creator_stats_view(&creator);
+        assert_eq!(stats.total_created, 3);
+        assert_eq!(stats.total_resolved, 3);
+        assert_eq!(stats.total_correct, 2);
+    }
 }
+

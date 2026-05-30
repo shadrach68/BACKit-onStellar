@@ -120,3 +120,12 @@ pub struct CallStats {
     pub up_stake_count: u32,
     pub down_stake_count: u32,
 }
+
+/// Creator reputation statistics tracked on-chain
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreatorStats {
+    pub total_created: u32,
+    pub total_resolved: u32,
+    pub total_correct: u32,
+}

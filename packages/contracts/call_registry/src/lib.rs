@@ -147,6 +147,12 @@ impl CallRegistry {
 
         set_call(&env, &call);
         record_call_created(&env);
+        
+        // Track creator reputation: increment total_created
+        let mut creator_stats = get_creator_stats(&env, &creator);
+        creator_stats.total_created += 1;
+        set_creator_stats(&env, &creator, &creator_stats);
+        
         extend_storage_ttl(&env);
 
         emit_call_created(
@@ -352,6 +358,23 @@ impl CallRegistry {
         call.outcome = outcome;
         call.end_price = end_price;
 
+        // Track creator reputation: increment total_resolved and conditionally total_correct
+        let mut creator_stats = get_creator_stats(&env, &call.creator);
+        creator_stats.total_resolved += 1;
+        
+        // Check if creator staked on the winning position
+        let creator_winning_stake = match outcome {
+            OUTCOME_UP => call.up_stakes.get(call.creator.clone()).unwrap_or(0),
+            OUTCOME_DOWN => call.down_stakes.get(call.creator.clone()).unwrap_or(0),
+            _ => 0,
+        };
+        
+        if creator_winning_stake > 0 {
+            creator_stats.total_correct += 1;
+        }
+        
+        set_creator_stats(&env, &call.creator, &creator_stats);
+
         set_call(&env, &call);
         extend_storage_ttl(&env);
 
@@ -541,6 +564,11 @@ impl CallRegistry {
             up_stake_count: call.up_stakes.len(),
             down_stake_count: call.down_stakes.len(),
         })
+    }
+
+    /// Get creator reputation statistics
+    pub fn get_creator_stats_view(env: Env, creator: Address) -> CreatorStats {
+        get_creator_stats(&env, &creator)
     }
 
     /// Get all calls a staker has participated in.
