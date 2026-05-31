@@ -45,6 +45,8 @@ pub struct Call {
     pub condition: ConditionType,
     /// Whether the call has been settled
     pub settled: bool,
+    /// Whether the call has been voided by admin (triggers full refunds)
+    pub voided: bool,
     /// Creation timestamp
     pub created_at: u64,
     /// Whether the call has been cancelled by its creator
