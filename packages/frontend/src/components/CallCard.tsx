@@ -1,6 +1,6 @@
 "use client";
 
-import StakeBar from "./StakeBar";
+import StakeDistributionBar from "./StakeDistributionBar";
 import { useState, useEffect } from "react";
 
 interface CallCardProps {
@@ -86,13 +86,14 @@ export default function CallCard({ call }: CallCardProps) {
         </div>
       </div>
 
-      {/* Progress bar */}
+      {/* Animated Pool Distribution */}
       <div className="mb-5">
-        <div className="flex justify-between text-[10px] font-bold text-gray-400 uppercase mb-2">
-          <span>Staking Distribution</span>
-          <span>Pool: {((call.stakes?.yes || 0) + (call.stakes?.no || 0)).toLocaleString()} USDC</span>
-        </div>
-        <StakeBar yes={call.stakes?.yes || 0} no={call.stakes?.no || 0} />
+        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Pool Distribution</p>
+        <StakeDistributionBar
+          yes={call.stakes?.yes || 0}
+          no={call.stakes?.no || 0}
+          variant="sm"
+        />
       </div>
 
       {/* Creator info */}
