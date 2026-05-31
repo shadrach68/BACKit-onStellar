@@ -1,4 +1,4 @@
-use crate::types::{Call, ContractConfig, GlobalStats};
+use crate::types::{Call, ContractConfig, GlobalStats, CreatorStats};
 use soroban_sdk::{contracttype, Address, Env};
 
 // ~120 days in ledgers (5s per ledger): 120 * 24 * 3600 / 5 = 2_073_600
@@ -17,6 +17,7 @@ pub enum DataKey {
     GlobalStakerSeen(Address),
     Call(u64),
     StakerCalls(Address),
+    CreatorStats(Address),
     UserStake(u64, Address, u32),
     UpStakerCount(u64),
     DownStakerCount(u64),
@@ -220,6 +221,30 @@ pub fn extend_storage_ttl(env: &Env) {
     env.storage()
         .instance()
         .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+}
+
+/// Get creator reputation stats, initializing if not found
+pub fn get_creator_stats(env: &Env, creator: &Address) -> CreatorStats {
+    let key = DataKey::CreatorStats(creator.clone());
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(CreatorStats {
+            total_created: 0,
+            total_resolved: 0,
+            total_correct: 0,
+        })
+}
+
+/// Store creator reputation stats in persistent storage
+pub fn set_creator_stats(env: &Env, creator: &Address, stats: &CreatorStats) {
+    let key = DataKey::CreatorStats(creator.clone());
+    env.storage().persistent().set(&key, stats);
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 /// Mark that a staker has claimed their void refund for a call

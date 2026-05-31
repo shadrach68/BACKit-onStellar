@@ -43,6 +43,7 @@ pub enum InstanceKey {
     DisputeWindow,
     PendingOutcome(u64),     // stores Outcome after quorum, before finalization
     DisputeWindowStart(u64), // ledger timestamp when quorum was reached
+    Paused,                  // Emergency pause flag for rogue oracle detection
     Version,
 }
 
@@ -88,4 +89,17 @@ pub fn get_dispute_window(env: &Env) -> u64 {
         .instance()
         .get(&InstanceKey::DisputeWindow)
         .unwrap_or(3600)
+}
+
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&InstanceKey::Paused)
+        .unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage()
+        .instance()
+        .set(&InstanceKey::Paused, &paused);
 }

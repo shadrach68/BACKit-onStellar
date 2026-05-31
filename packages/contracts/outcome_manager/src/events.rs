@@ -57,6 +57,20 @@ pub fn emit_outcome_disputed(env: &Env, call_id: u64, new_outcome: u32, new_pric
     );
 }
 
+pub fn emit_contract_paused(env: &Env) {
+    env.events().publish(
+        (symbol_short!("contract"), symbol_short!("paused")),
+        (),
+    );
+}
+
+pub fn emit_contract_unpaused(env: &Env) {
+    env.events().publish(
+        (symbol_short!("contract"), symbol_short!("unpaused")),
+        (),
+    );
+}
+
 /// Emitted when the contract WASM is upgraded
 pub fn emit_contract_upgraded(
     env: &Env,

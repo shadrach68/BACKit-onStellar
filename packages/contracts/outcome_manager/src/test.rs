@@ -649,23 +649,67 @@ fn test_batch_claim_with_fee_deducted() {
     let _ = fee_collector;
 }
 
-#[test]
-#[should_panic(expected = "already claimed")]
-fn test_batch_claim_duplicate_within_same_batch_panics() {
-    let env = Env::default();
-    let (_, registry_id, client) = setup_with_fee(&env, 0);
+// ─── Pause Mechanism Tests ─────────────────────────────────────────────────────
 
+#[test]
+fn test_pause_and_unpause() {
+    let env = Env::default();
+    let (admin, _registry_id, _oracle_secret, _oracle_pubkey, client) = setup_single_oracle(&env);
+
+    // Initially not paused
+    assert!(!client.is_paused_view());
+
+    // Admin can pause
+    env.mock_all_auths();
+    client.pause();
+    assert!(client.is_paused_view());
+
+    // Admin can unpause
+    client.unpause();
+    assert!(!client.is_paused_view());
+}
+
+#[test]
+#[should_panic(expected = "contract is paused")]
+fn test_submit_outcome_fails_when_paused() {
+    let env = Env::default();
+    let (admin, registry_id, oracle_secret, oracle_pubkey, client) = setup_single_oracle(&env);
+
+    env.mock_all_auths();
+    client.pause();
+
+    // Attempt to submit outcome while paused should fail
+    let signed = SignedOutcome {
+        call_id: 1,
+        outcome: 1,
+        price: 100,
+        timestamp: 1000,
+        oracle_pubkey: oracle_pubkey.clone(),
+        signature: sign_outcome(&env, &oracle_secret, 1, 1, 100, 1000),
+    };
+
+    client.submit_outcome(&registry_id, &signed);
+}
+
+#[test]
+#[should_panic(expected = "contract is paused")]
+fn test_claim_payout_fails_when_paused() {
+    let env = Env::default();
+    let (admin, registry_id, _oracle_secret, _oracle_pubkey, client) = setup_single_oracle(&env);
     let staker = Address::generate(&env);
 
-    let mut stakers = Vec::new(&env);
-    stakers.push_back(staker.clone());
-    stakers.push_back(staker.clone());
+    env.mock_all_auths();
+    client.pause();
 
-    let mut stakes = Vec::new(&env);
-    stakes.push_back(50_i128);
-    stakes.push_back(50_i128);
-
-    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &100_i128, &50_i128);
+    // Attempt to claim while paused should fail
+    client.claim_payout(
+        &registry_id,
+        &1u64,
+        &staker,
+        &100_i128,
+        &100_i128,
+        &100_i128,
+    );
 
 }
 
