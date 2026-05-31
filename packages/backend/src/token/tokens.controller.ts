@@ -1,4 +1,5 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
+import { ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { TokensService } from './tokens.service';
 import { Token } from './entities/token.entity';
 
@@ -6,13 +7,21 @@ import { Token } from './entities/token.entity';
 export class TokensController {
   constructor(private readonly tokensService: TokensService) {}
 
-  /**
-   * GET /tokens
-   * Returns the active token list for frontend dropdowns.
-   */
   @Get()
-  async getTokens(): Promise<Token[]> {
-    return this.tokensService.getAll();
+  @ApiOperation({
+    summary: 'Returns the active token list for frontend dropdowns',
+  })
+  @ApiQuery({
+    name: 'whitelisted',
+    required: false,
+    type: Boolean,
+    description: 'If true, only returns whitelisted tokens',
+  })
+  async getTokens(
+    @Query('whitelisted') whitelisted?: string,
+  ): Promise<Token[]> {
+    const whitelistedOnly = whitelisted === 'true';
+    return this.tokensService.getAll(whitelistedOnly);
   }
 
   @Get('search')

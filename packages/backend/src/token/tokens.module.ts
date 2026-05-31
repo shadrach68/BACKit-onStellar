@@ -6,15 +6,16 @@ import { Token } from './entities/token.entity';
 import { TokensRepository } from './tokens.repository';
 import { TokensService } from './tokens.service';
 import { TokensController } from './tokens.controller';
+import { AdminTokensController } from './admin-tokens.controller';
 import { TokensSyncWorker } from './tokens.sync.worker';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Token]),
     HttpModule,
-    ScheduleModule.forRoot(), // safe to call in child modules
+    ScheduleModule.forRoot(),
   ],
-  controllers: [TokensController],
+  controllers: [TokensController, AdminTokensController],
   providers: [TokensService, TokensRepository, TokensSyncWorker],
   exports: [TokensService, TokensRepository],
 })
