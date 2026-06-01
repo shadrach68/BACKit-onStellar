@@ -99,6 +99,9 @@ pub struct ContractConfig {
     pub metadata_version: u32,
     /// When true, create/stake/resolve operations are blocked.
     pub paused: bool,
+    /// Number of seconds before `end_ts` during which staking is no longer
+    /// accepted. Default: 300 (5 minutes). Set to 0 to disable the buffer.
+    pub staking_cutoff_secs: u64,
 }
 
 /// Contract-wide aggregated statistics for dashboards.

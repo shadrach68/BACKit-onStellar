@@ -3,6 +3,7 @@ use soroban_sdk::{Address, Bytes, Env, Symbol};
 
 pub const PARAM_MAX_STAKE_PER_USER: &str = "max_stake_per_user";
 pub const PARAM_MIN_STAKE: &str = "min_stake";
+pub const PARAM_STAKING_CUTOFF: &str = "staking_cutoff_secs";
 
 /// Emitted when a new call is created
 pub fn emit_call_created(
@@ -120,6 +121,24 @@ pub fn emit_admin_params_changed_i128(
     changed_by: &Address,
     old_value: i128,
     new_value: i128,
+) {
+    env.events().publish(
+        ("call_registry", "admin_params_changed"),
+        (
+            Symbol::new(env, param),
+            changed_by.clone(),
+            old_value,
+            new_value,
+        ),
+    );
+}
+
+pub fn emit_admin_params_changed_u64(
+    env: &Env,
+    param: &str,
+    changed_by: &Address,
+    old_value: u64,
+    new_value: u64,
 ) {
     env.events().publish(
         ("call_registry", "admin_params_changed"),

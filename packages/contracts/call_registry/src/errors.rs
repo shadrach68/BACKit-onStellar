@@ -30,4 +30,6 @@ pub enum CallRegistryError {
     InvalidOutcome = 12,
     /// `fee_bps` exceeds 10 000 (100 %).
     FeeTooHigh = 13,
+    /// Staking attempted within the cutoff window before `end_ts`.
+    StakingCutoffActive = 14,
 }

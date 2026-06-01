@@ -84,6 +84,7 @@ impl CallRegistry {
             min_stake,
             metadata_version: 0,
             paused: false,
+            staking_cutoff_secs: 300,
         };
 
         set_config(&env, &config);
@@ -291,6 +292,12 @@ impl CallRegistry {
             return Err(CallRegistryError::CallEnded);
         }
 
+        // Staking cutoff: reject stakes within `staking_cutoff_secs` of end_ts.
+        let cutoff = config.staking_cutoff_secs;
+        if cutoff > 0 && call.end_ts > cutoff && current_timestamp >= call.end_ts - cutoff {
+            return Err(CallRegistryError::StakingCutoffActive);
+        }
+
         if call.settled {
             return Err(CallRegistryError::CallSettled);
         }
@@ -365,6 +372,13 @@ impl CallRegistry {
     /// Unpause the contract (admin only).
     pub fn unpause(env: Env) {
         admin::unpause(env);
+    }
+
+    /// Set the staking cutoff window in seconds before `end_ts` (admin only).
+    /// Staking is blocked when `current_timestamp >= call.end_ts - new_cutoff`.
+    /// Pass `0` to disable the cutoff.
+    pub fn set_staking_cutoff(env: Env, new_cutoff: u64) {
+        admin::set_staking_cutoff(env, new_cutoff);
     }
 
     /// Resolve a call with an outcome (outcome_manager only).
