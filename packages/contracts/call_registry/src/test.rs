@@ -1297,9 +1297,8 @@ mod call_registry {
         env.ledger().set_timestamp(1000);
         let creator = Address::generate(&env);
         let staker = Address::generate(&env);
-        let (call, stake_token) = make_call(&env, &client, &creator);
+        let (call, _stake_token) = make_call(&env, &client, &creator);
 
-        mint(&env, &stake_token, &staker, 100_000_000_i128);
         client.stake_on_call(&staker, &call.id, &50_000_000_i128, &1);
 
         client.void_call(&call.id);
@@ -1917,9 +1916,8 @@ mod call_registry {
         env.ledger().set_timestamp(1000);
         let creator = Address::generate(&env);
         let staker = Address::generate(&env);
-        let (call, stake_token) = make_call(&env, &client, &creator);
+        let (call, _stake_token) = make_call(&env, &client, &creator);
 
-        mint(&env, &stake_token, &staker, 100_000_000_i128);
         client.stake_on_call(&staker, &call.id, &50_000_000_i128, &1);
 
         let before = client.get_instance_entry_count();
