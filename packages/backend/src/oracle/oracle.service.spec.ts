@@ -181,6 +181,31 @@ describe('OracleService', () => {
     );
   });
 
+  it('resolveMarket stores outcome even when IPFS pinning fails', async () => {
+    const call: Partial<OracleCall> = {
+      id: 2,
+      pairAddress: 'PAIR2',
+      strikePrice: 100,
+      status: OracleCallStatus.OPEN,
+      reportCount: 0,
+      isHidden: false,
+    };
+    oracleCallRepo.findOne.mockResolvedValue(call);
+
+    // Make IPFS pinning throw — resolution should still succeed
+    const ipfsMock = { pinEvidencePayload: jest.fn().mockRejectedValue(new Error('IPFS down')) };
+    (service as any).ipfsService = ipfsMock;
+
+    await service.resolveMarket(2, '90');
+
+    expect(oracleOutcomeRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'NO', signature: 'sig' }),
+    );
+    expect(oracleCallRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: OracleCallStatus.RESOLVED_NO }),
+    );
+  });
+
   it('getMarketStatus maps oracle call statuses to coarse lifecycle', async () => {
     oracleCallRepo.findOne.mockResolvedValueOnce({
       id: 1,
