@@ -105,6 +105,7 @@ impl CallRegistry {
     /// # Errors
     /// * [`CallRegistryError::InvalidStakeAmount`] – `stake_amount` ≤ 0.
     /// * [`CallRegistryError::InvalidEndTime`] – `end_ts` is not in the future.
+    /// * [`CallRegistryError::InvalidOutcomeCount`] – `outcome_count` < 2.
     pub fn create_call(
         env: Env,
         creator: Address,
@@ -116,6 +117,7 @@ impl CallRegistry {
         pair_id: Bytes,
         ipfs_cid: Bytes,
         condition: ConditionType,
+        outcome_count: u32,
     ) -> Result<Call, CallRegistryError> {
         creator.require_auth();
 
@@ -126,6 +128,10 @@ impl CallRegistry {
         }
         if start_price <= 0 {
             return Err(CallRegistryError::InvalidStakeAmount);
+        }
+
+        if outcome_count < 2 {
+            return Err(CallRegistryError::InvalidOutcomeCount);
         }
 
         let current_timestamp = env.ledger().timestamp();
@@ -143,6 +149,15 @@ impl CallRegistry {
         }
         let call_id = next_call_id(&env);
 
+        let mut outcome_stakes = Map::new(&env);
+        let mut stakes = Map::new(&env);
+
+        // Initialize maps for each outcome
+        for i in 1..=outcome_count {
+            outcome_stakes.set(i, 0);
+            stakes.set(i, Map::new(&env));
+        }
+
         let call = Call {
             id: call_id,
             creator: creator.clone(),
@@ -152,8 +167,9 @@ impl CallRegistry {
             token_address: token_address.clone(),
             pair_id: pair_id.clone(),
             ipfs_cid: ipfs_cid.clone(),
-            total_up_stake: 0,
-            total_down_stake: 0,
+            outcome_count,
+            outcome_stakes,
+            stakes,
             outcome: 0,
             start_price,
             end_price: 0,
@@ -186,6 +202,7 @@ impl CallRegistry {
             &token_address,
             &pair_id,
             &ipfs_cid,
+            outcome_count,
         );
 
         Ok(call)
@@ -265,7 +282,7 @@ impl CallRegistry {
     /// * [`CallRegistryError::CallNotFound`]        – `call_id` does not exist.
     /// * [`CallRegistryError::CallEnded`]           – call's `end_ts` has passed.
     /// * [`CallRegistryError::CallSettled`]         – call is already settled.
-    /// * [`CallRegistryError::InvalidPosition`]     – `position` ∉ {1, 2}.
+    /// * [`CallRegistryError::InvalidPosition`]     – `position` ∉ [1, outcome_count].
     pub fn stake_on_call(
         env: Env,
         staker: Address,
@@ -310,8 +327,10 @@ impl CallRegistry {
             panic!("Call has been voided");
         }
 
-        let stake_position =
-            StakePosition::from_u32(position).ok_or(CallRegistryError::InvalidPosition)?;
+        // Validate position is within valid range
+        if position < 1 || position > call.outcome_count {
+            return Err(CallRegistryError::InvalidPosition);
+        }
 
         // Per-user stake cap
         let config = get_config(&env).expect("Contract not initialized");
@@ -323,26 +342,17 @@ impl CallRegistry {
         let token_client = token::Client::new(&env, &call.stake_token);
         token_client.transfer(&staker, &env.current_contract_address(), &amount);
 
-        match stake_position {
-            StakePosition::Up => {
-                let new_stake = current_stake + amount;
-                if current_stake == 0 {
-                    set_up_staker_count(&env, call_id, get_up_staker_count(&env, call_id) + 1);
-                }
-                set_user_stake(&env, call_id, &staker, position, new_stake);
-                add_call_staker(&env, call_id, &staker);
-                call.total_up_stake += amount;
-            }
-            StakePosition::Down => {
-                let new_stake = current_stake + amount;
-                if current_stake == 0 {
-                    set_down_staker_count(&env, call_id, get_down_staker_count(&env, call_id) + 1);
-                }
-                set_user_stake(&env, call_id, &staker, position, new_stake);
-                add_call_staker(&env, call_id, &staker);
-                call.total_down_stake += amount;
-            }
-        }
+        // Update stake maps with generalized position support
+        let current_total = call.outcome_stakes.get(position).unwrap_or(0);
+        call.outcome_stakes.set(position, current_total + amount);
+
+        let mut outcome_stakers = call.stakes.get(position).unwrap_or_else(|| Map::new(&env));
+        let current_staker_stake = outcome_stakers.get(staker.clone()).unwrap_or(0);
+        outcome_stakers.set(staker.clone(), current_staker_stake + amount);
+        call.stakes.set(position, outcome_stakers);
+
+        add_call_staker(&env, call_id, &staker);
+        set_user_stake(&env, call_id, &staker, position, current_staker_stake + amount);
 
         set_call(&env, &call);
         add_staker_call(&env, &staker, call_id);
@@ -385,7 +395,7 @@ impl CallRegistry {
     /// # Errors
     /// * [`CallRegistryError::NotInitialized`] – contract not initialised.
     /// * [`CallRegistryError::CallNotFound`]   – `call_id` does not exist.
-    /// * [`CallRegistryError::InvalidOutcome`] – `outcome` ∉ {1, 2}.
+    /// * [`CallRegistryError::InvalidOutcome`] – `outcome` ∉ [1, outcome_count].
     /// * [`CallRegistryError::CallNotEnded`]   – `end_ts` has not yet passed.
     pub fn resolve_call(
         env: Env,
@@ -399,7 +409,8 @@ impl CallRegistry {
 
         let mut call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
 
-        if !is_valid_outcome(outcome) {
+        // Validate outcome is within valid range
+        if outcome < 1 || outcome > call.outcome_count {
             return Err(CallRegistryError::InvalidOutcome);
         }
 
@@ -613,15 +624,21 @@ impl CallRegistry {
     /// * [`CallRegistryError::CallNotFound`] – `call_id` does not exist.
     pub fn get_call_stats(env: Env, call_id: u64) -> Result<CallStats, CallRegistryError> {
         let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
-        let up_stake_count = get_up_staker_count(&env, call_id);
-        let down_stake_count = get_down_staker_count(&env, call_id);
+
+        let mut outcome_stake_counts = Map::new(&env);
+        let mut total_stakes = 0;
+
+        for i in 1..=call.outcome_count {
+            let outcome_stakers = call.stakes.get(i).unwrap_or_else(|| Map::new(&env));
+            let count = outcome_stakers.len();
+            outcome_stake_counts.set(i, count);
+            total_stakes += count;
+        }
 
         Ok(CallStats {
-            total_up_stake: call.total_up_stake,
-            total_down_stake: call.total_down_stake,
-            total_stakes: up_stake_count + down_stake_count,
-            up_stake_count,
-            down_stake_count,
+            outcome_stakes: call.outcome_stakes,
+            outcome_stake_counts,
+            total_stakes,
         })
     }
 
@@ -659,21 +676,29 @@ impl CallRegistry {
     /// Get the stake amount a staker has on a specific call position.
     /// # Errors
     /// * [`CallRegistryError::CallNotFound`]    – `call_id` does not exist.
-    /// * [`CallRegistryError::InvalidPosition`] – `position` ∉ {1, 2}.
+    /// * [`CallRegistryError::InvalidPosition`] – `position` ∉ [1, outcome_count].
     pub fn get_staker_stake(
         env: Env,
         call_id: u64,
         staker: Address,
         position: u32,
     ) -> Result<i128, CallRegistryError> {
-        // Just to verify call exists
-        get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
+        let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
 
-        match position {
-            OUTCOME_UP => Ok(get_user_stake(&env, call_id, &staker, position)),
-            OUTCOME_DOWN => Ok(get_user_stake(&env, call_id, &staker, position)),
-            _ => Err(CallRegistryError::InvalidPosition),
+        if position < 1 || position > call.outcome_count {
+            return Err(CallRegistryError::InvalidPosition);
         }
+
+        let outcome_stakers = call.stakes.get(position).unwrap_or_else(|| Map::new(&env));
+        Ok(outcome_stakers.get(staker).unwrap_or(0))
+    }
+
+    /// Get the total stakes for each outcome of a call.
+    /// # Errors
+    /// * [`CallRegistryError::CallNotFound`] – `call_id` does not exist.
+    pub fn get_outcome_stakes(env: Env, call_id: u64) -> Result<Map<u32, i128>, CallRegistryError> {
+        let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
+        Ok(call.outcome_stakes)
     }
 
     /// Get total number of calls created.

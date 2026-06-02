@@ -28,8 +28,8 @@ pub enum CallRegistryError {
     CallNotEnded = 11,
     /// `outcome` passed to `resolve_call` is not `1` (UP) or `2` (DOWN).
     InvalidOutcome = 12,
+    /// `outcome_count` is less than 2.
+    InvalidOutcomeCount = 13,
     /// `fee_bps` exceeds 10 000 (100 %).
-    FeeTooHigh = 13,
-    /// Staking attempted within the cutoff window before `end_ts`.
-    StakingCutoffActive = 14,
+    FeeTooHigh = 14,
 }

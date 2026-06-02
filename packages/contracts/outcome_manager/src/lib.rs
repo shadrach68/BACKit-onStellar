@@ -11,13 +11,13 @@ use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, IntoVal, 
 use auth::require_admin;
 use backit_shared::{is_valid_fee_bps, is_valid_outcome};
 use events::{
-    emit_batch_payout_started, emit_contract_upgraded, emit_fee_collected, emit_outcome_disputed,
-    emit_outcome_finalized, emit_outcome_submitted, emit_payout_claimed, emit_contract_paused, emit_contract_unpaused,
-    emit_price_observation_submitted,
+    emit_admin_params_changed, emit_batch_payout_started, emit_contract_upgraded,
+    emit_fee_collected, emit_outcome_disputed, emit_outcome_finalized, emit_outcome_submitted,
+    emit_payout_claimed, emit_price_observation_submitted,
 };
 use storage::{
-    set_dispute_window, InstanceKey, OracleVote, Outcome, PersistentKey, PriceObservation,
-    SignedOutcome, TempKey, is_paused, set_paused,
+    set_dispute_window, set_max_submission_delay, InstanceKey, Outcome, OracleVote,
+    PersistentKey, PriceObservation, SignedOutcome, TempKey,
 };
 use verification::{build_message, verify_signature};
 
@@ -54,6 +54,15 @@ fn registry_release_escrow(
 fn registry_mark_settled(env: &Env, registry: &Address, call_id: u64) {
     let args = (call_id,).into_val(env);
     env.invoke_contract::<()>(registry, &Symbol::new(env, "mark_settled"), args);
+}
+
+// ─── Pause helper ─────────────────────────────────────────────────────────────
+
+fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&InstanceKey::Paused)
+        .unwrap_or(false)
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -118,6 +127,7 @@ impl OutcomeManager {
             .set(&InstanceKey::FeeCollector, &fee_collector);
         env.storage().instance().set(&InstanceKey::FeeBps, &fee_bps);
         set_dispute_window(&env, dispute_window_secs);
+        set_max_submission_delay(&env, 86400);
         env.storage().instance().set(&InstanceKey::Version, &CONTRACT_VERSION);
     }
 
@@ -191,22 +201,26 @@ impl OutcomeManager {
             .set(&InstanceKey::Admin, &new_admin);
     }
 
-    /// Pause the contract (admin only).
-    /// When paused:
-    /// - submit_outcome() will fail
-    /// - claim_payout() will fail
-    /// - mark_settled() still works (admin needs to finalize outcomes)
-    pub fn pause(env: Env) {
+    pub fn set_max_submission_delay(env: Env, new_delay: u64) {
         require_admin(&env);
-        set_paused(&env, true);
-        emit_contract_paused(&env);
+        set_max_submission_delay(&env, new_delay);
+        emit_admin_params_changed(&env, new_delay);
     }
 
-    /// Unpause the contract (admin only).
+    pub fn get_max_submission_delay(env: Env) -> u64 {
+        storage::get_max_submission_delay(&env)
+    }
+
+    // ── Emergency Pause ────────────────────────────────────────────────────────
+
+    pub fn pause(env: Env) {
+        require_admin(&env);
+        env.storage().instance().set(&InstanceKey::Paused, &true);
+    }
+
     pub fn unpause(env: Env) {
         require_admin(&env);
-        set_paused(&env, false);
-        emit_contract_unpaused(&env);
+        env.storage().instance().set(&InstanceKey::Paused, &false);
     }
 
     pub fn is_paused_view(env: Env) -> bool {
@@ -227,8 +241,7 @@ impl OutcomeManager {
     /// - `duplicate submission`   – this oracle already voted on this call
     /// - `invalid outcome`        – outcome is not 1 (UP) or 2 (DOWN)
     /// - (ed25519_verify panics)  – signature is invalid; tx is reverted
-    pub fn submit_outcome(env: Env, registry: Address, signed: SignedOutcome) {
-        // 0. Check if contract is paused (emergency guard)
+    pub fn submit_outcome(env: Env, registry: Address, signed: SignedOutcome, call_end_ts: u64) {
         if is_paused(&env) {
             panic!("contract is paused");
         }
@@ -258,6 +271,16 @@ impl OutcomeManager {
         // 4. Validate outcome range
         if !is_valid_outcome(signed.outcome) {
             panic!("invalid outcome: must be 1 (UP) or 2 (DOWN)");
+        }
+
+        // 4b. Enforce submission deadline: oracle timestamp must be within
+        //     call_end_ts + max_submission_delay to reject stale reports
+        let max_delay = storage::get_max_submission_delay(&env);
+        let deadline = call_end_ts
+            .checked_add(max_delay)
+            .expect("overflow in submission deadline");
+        if signed.timestamp > deadline {
+            panic!("submission outside allowed window");
         }
 
         // 5. Build canonical message and verify ed25519 signature
