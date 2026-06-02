@@ -105,7 +105,8 @@ async function bootstrap() {
   );
 }
 
-bootstrap().catch((error) => {
-  console.error(`Failed to start application: ${error.message}`, error.stack);
+bootstrap().catch((error: unknown) => {
+  const err = error as Error;
+  console.error(`Failed to start application: ${err.message}`, err.stack);
   process.exit(1);
 });
