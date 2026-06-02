@@ -1,11 +1,8 @@
 #![cfg(test)]
 
-use soroban_sdk::{
-    contract, contractimpl,
-    testutils::Address as _,
-    Address, BytesN, Env, Vec,
-};
+use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, BytesN, Env, Vec};
 
+use crate::errors::OutcomeError;
 use crate::storage::{OracleVote, PriceObservation, SignedOutcome};
 use crate::{OutcomeManager, OutcomeManagerClient, MAX_ORACLES};
 
@@ -94,8 +91,17 @@ fn setup_single_oracle(
     (admin, registry_id, oracle_secret, oracle_pubkey, client)
 }
 
-// ─── Initialization Tests ──────────────────────────────────────────────────────
+fn assert_contract_error<T, E>(
+    result: Result<Result<T, E>, Result<soroban_sdk::Error, soroban_sdk::InvokeError>>,
+    expected: OutcomeError,
+) {
+    assert!(matches!(
+        result,
+        Err(Ok(err)) if err == soroban_sdk::Error::from_contract_error(expected as u32)
+    ));
+}
 
+// ─── Initialization Tests ──────────────────────────────────────────────────────
 
 fn sign_observation(
     env: &Env,
@@ -133,7 +139,10 @@ fn test_twap_three_equal_intervals() {
         let sig = sign_observation(&env, &oracle_secret, call_id, price, ts);
         client.submit_price_observation(
             &call_id,
-            &PriceObservation { price, timestamp: ts },
+            &PriceObservation {
+                price,
+                timestamp: ts,
+            },
             &oracle_pubkey,
             &sig,
         );
@@ -152,7 +161,10 @@ fn test_twap_unequal_intervals() {
         let sig = sign_observation(&env, &oracle_secret, call_id, price, ts);
         client.submit_price_observation(
             &call_id,
-            &PriceObservation { price, timestamp: ts },
+            &PriceObservation {
+                price,
+                timestamp: ts,
+            },
             &oracle_pubkey,
             &sig,
         );
@@ -161,7 +173,6 @@ fn test_twap_unequal_intervals() {
 }
 
 #[test]
-#[should_panic(expected = "minimum 3 price observations required")]
 fn test_twap_requires_minimum_3_observations() {
     let env = Env::default();
     let (_admin, _reg, oracle_secret, oracle_pubkey, client) = setup_single_oracle(&env);
@@ -170,16 +181,19 @@ fn test_twap_requires_minimum_3_observations() {
         let sig = sign_observation(&env, &oracle_secret, call_id, price, ts);
         client.submit_price_observation(
             &call_id,
-            &PriceObservation { price, timestamp: ts },
+            &PriceObservation {
+                price,
+                timestamp: ts,
+            },
             &oracle_pubkey,
             &sig,
         );
     }
-    client.compute_twap(&call_id);
+    let result = client.try_compute_twap(&call_id);
+    assert_contract_error(result, OutcomeError::InsufficientPriceObservations);
 }
 
 #[test]
-#[should_panic(expected = "observation timestamp must be strictly increasing")]
 fn test_twap_rejects_non_increasing_timestamp() {
     let env = Env::default();
     let (_admin, _reg, oracle_secret, oracle_pubkey, client) = setup_single_oracle(&env);
@@ -187,17 +201,24 @@ fn test_twap_rejects_non_increasing_timestamp() {
     let sig1 = sign_observation(&env, &oracle_secret, call_id, 100, 1000);
     client.submit_price_observation(
         &call_id,
-        &PriceObservation { price: 100, timestamp: 1000 },
+        &PriceObservation {
+            price: 100,
+            timestamp: 1000,
+        },
         &oracle_pubkey,
         &sig1,
     );
     let sig2 = sign_observation(&env, &oracle_secret, call_id, 200, 1000);
-    client.submit_price_observation(
+    let result = client.try_submit_price_observation(
         &call_id,
-        &PriceObservation { price: 200, timestamp: 1000 },
+        &PriceObservation {
+            price: 200,
+            timestamp: 1000,
+        },
         &oracle_pubkey,
         &sig2,
     );
+    assert_contract_error(result, OutcomeError::ObservationOutOfOrder);
 }
 
 #[test]
@@ -221,7 +242,6 @@ fn test_initialize_success() {
 }
 
 #[test]
-#[should_panic(expected = "already initialized")]
 fn test_initialize_twice_fails() {
     let env = Env::default();
     let (admin, _, _, pubkey, client) = setup_single_oracle(&env);
@@ -229,11 +249,11 @@ fn test_initialize_twice_fails() {
     let fee_collector = Address::generate(&env);
     let mut oracles = Vec::new(&env);
     oracles.push_back(pubkey);
-    client.initialize(&admin, &oracles, &1u32, &fee_collector, &0u32, &0u64);
+    let result = client.try_initialize(&admin, &oracles, &1u32, &fee_collector, &0u32, &0u64);
+    assert_contract_error(result, OutcomeError::AlreadyInitialized);
 }
 
 #[test]
-#[should_panic(expected = "invalid quorum")]
 fn test_initialize_quorum_zero_fails() {
     let env = Env::default();
     env.mock_all_auths();
@@ -246,7 +266,8 @@ fn test_initialize_quorum_zero_fails() {
     let fee_collector = Address::generate(&env);
     let mut oracles = Vec::new(&env);
     oracles.push_back(pubkey);
-    client.initialize(&admin, &oracles, &0u32, &fee_collector, &0u32, &0u64);
+    let result = client.try_initialize(&admin, &oracles, &0u32, &fee_collector, &0u32, &0u64);
+    assert_contract_error(result, OutcomeError::InvalidQuorum);
 }
 
 // ─── Oracle Submission & Verification Tests ────────────────────────────────────
@@ -332,7 +353,6 @@ fn test_quorum_reached_with_two_oracles() {
 }
 
 #[test]
-#[should_panic(expected = "unauthorized oracle")]
 fn test_submit_unauthorized_oracle_fails() {
     let env = Env::default();
     env.mock_all_auths();
@@ -342,7 +362,7 @@ fn test_submit_unauthorized_oracle_fails() {
     let call_id = 1u64;
     let sig = sign_outcome(&env, &secret2, call_id, 1, 100, 9000);
 
-    client.submit_outcome(
+    let result = client.try_submit_outcome(
         &mock_registry,
         &SignedOutcome {
             call_id,
@@ -354,6 +374,79 @@ fn test_submit_unauthorized_oracle_fails() {
         },
         &0u64,
     );
+    assert_contract_error(result, OutcomeError::UnauthorizedOracle);
+}
+
+#[test]
+fn test_submit_duplicate_submission_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let (secret1, pubkey1) = gen_keypair(&env);
+    let (_, pubkey2) = gen_keypair(&env);
+
+    let contract_id = env.register_contract(None, OutcomeManager);
+    let client = OutcomeManagerClient::new(&env, &contract_id);
+
+    let mut oracles = Vec::new(&env);
+    oracles.push_back(pubkey1.clone());
+    oracles.push_back(pubkey2);
+    let fee_collector = Address::generate(&env);
+    client.initialize(&admin, &oracles, &2u32, &fee_collector, &0u32, &0u64);
+
+    let registry_id = env.register_contract(None, MockRegistry);
+    let signed = SignedOutcome {
+        call_id: 7,
+        outcome: 1,
+        price: 100,
+        timestamp: 1000,
+        oracle_pubkey: pubkey1.clone(),
+        signature: sign_outcome(&env, &secret1, 7, 1, 100, 1000),
+    };
+
+    client.submit_outcome(&registry_id, &signed, &0u64);
+    let result = client.try_submit_outcome(&registry_id, &signed, &0u64);
+    assert_contract_error(result, OutcomeError::DuplicateSubmission);
+}
+
+#[test]
+fn test_submit_invalid_outcome_fails() {
+    let env = Env::default();
+    let (_admin, registry_id, oracle_secret, oracle_pubkey, client) = setup_single_oracle(&env);
+
+    let result = client.try_submit_outcome(
+        &registry_id,
+        &SignedOutcome {
+            call_id: 8,
+            outcome: 3,
+            price: 100,
+            timestamp: 1000,
+            oracle_pubkey: oracle_pubkey.clone(),
+            signature: sign_outcome(&env, &oracle_secret, 8, 3, 100, 1000),
+        },
+        &0u64,
+    );
+    assert_contract_error(result, OutcomeError::InvalidOutcome);
+}
+
+#[test]
+fn test_submit_outcome_after_settlement_fails() {
+    let env = Env::default();
+    let (_admin, registry_id, oracle_secret, oracle_pubkey, client) = setup_single_oracle(&env);
+
+    let signed = SignedOutcome {
+        call_id: 9,
+        outcome: 1,
+        price: 100,
+        timestamp: 1000,
+        oracle_pubkey: oracle_pubkey.clone(),
+        signature: sign_outcome(&env, &oracle_secret, 9, 1, 100, 1000),
+    };
+
+    client.submit_outcome(&registry_id, &signed, &0u64);
+    let result = client.try_submit_outcome(&registry_id, &signed, &0u64);
+    assert_contract_error(result, OutcomeError::AlreadySettled);
 }
 
 // ─── Admin Control Tests ───────────────────────────────────────────────────────
@@ -395,7 +488,6 @@ fn test_get_oracles_tracks_add_remove() {
 }
 
 #[test]
-#[should_panic(expected = "max oracles reached")]
 fn test_add_oracle_enforces_max_limit() {
     let env = Env::default();
     env.mock_all_auths();
@@ -412,7 +504,8 @@ fn test_add_oracle_enforces_max_limit() {
 
     client.initialize(&admin, &oracles, &1u32, &fee_collector, &0u32, &0u64);
     let (_, extra_pubkey) = gen_keypair(&env);
-    client.add_oracle(&extra_pubkey);
+    let result = client.try_add_oracle(&extra_pubkey);
+    assert_contract_error(result, OutcomeError::MaxOraclesReached);
 }
 
 #[test]
@@ -478,11 +571,11 @@ fn test_payout_calculation_single_winner_takes_all() {
 }
 
 #[test]
-#[should_panic(expected = "call not settled")]
 fn test_get_outcome_unsettled_panics() {
     let env = Env::default();
     let (_, _, _, _, client) = setup_single_oracle(&env);
-    client.get_outcome(&999u64);
+    let result = client.try_get_outcome(&999u64);
+    assert_contract_error(result, OutcomeError::CallNotSettled);
 }
 
 // ─── Fee Deduction Tests ───────────────────────────────────────────────────────
@@ -586,7 +679,6 @@ fn test_fee_goes_to_correct_address() {
 }
 
 #[test]
-#[should_panic(expected = "invalid fee_bps")]
 fn test_invalid_fee_bps_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -599,7 +691,8 @@ fn test_invalid_fee_bps_panics() {
 
     let mut oracles = Vec::new(&env);
     oracles.push_back(pubkey);
-    client.initialize(&admin, &oracles, &1u32, &fee_collector, &10001u32, &0u64);
+    let result = client.try_initialize(&admin, &oracles, &1u32, &fee_collector, &10001u32, &0u64);
+    assert_contract_error(result, OutcomeError::InvalidFeeBps);
 }
 
 // ─── Batch Payout Tests ────────────────────────────────────────────────────────
@@ -632,7 +725,6 @@ fn test_batch_claim_payouts_three_stakers() {
 }
 
 #[test]
-#[should_panic(expected = "already claimed")]
 fn test_batch_claim_panics_on_duplicate_staker() {
     let env = Env::default();
     let (_, registry_id, client) = setup_with_fee(&env, 0);
@@ -648,11 +740,12 @@ fn test_batch_claim_panics_on_duplicate_staker() {
     client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &50_i128, &50_i128);
 
     // Second batch with same staker — must panic
-    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &50_i128, &50_i128);
+    let result =
+        client.try_batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &50_i128, &50_i128);
+    assert_contract_error(result, OutcomeError::AlreadyClaimed);
 }
 
 #[test]
-#[should_panic(expected = "empty batch")]
 fn test_batch_claim_panics_on_empty_batch() {
     let env = Env::default();
     let (_, registry_id, client) = setup_with_fee(&env, 0);
@@ -660,11 +753,18 @@ fn test_batch_claim_panics_on_empty_batch() {
     let stakers: Vec<Address> = Vec::new(&env);
     let stakes: Vec<i128> = Vec::new(&env);
 
-    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &100_i128, &100_i128);
+    let result = client.try_batch_claim_payouts(
+        &registry_id,
+        &1u64,
+        &stakers,
+        &stakes,
+        &100_i128,
+        &100_i128,
+    );
+    assert_contract_error(result, OutcomeError::EmptyBatch);
 }
 
 #[test]
-#[should_panic(expected = "length mismatch")]
 fn test_batch_claim_panics_on_length_mismatch() {
     let env = Env::default();
     let (_, registry_id, client) = setup_with_fee(&env, 0);
@@ -676,11 +776,12 @@ fn test_batch_claim_panics_on_length_mismatch() {
     let mut stakes = Vec::new(&env);
     stakes.push_back(50_i128); // one fewer than stakers
 
-    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &100_i128, &50_i128);
+    let result =
+        client.try_batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &100_i128, &50_i128);
+    assert_contract_error(result, OutcomeError::LengthMismatch);
 }
 
 #[test]
-#[should_panic(expected = "call not settled")]
 fn test_batch_claim_panics_on_unsettled_call() {
     let env = Env::default();
     let (_, registry_id, client) = setup_with_fee(&env, 0);
@@ -691,7 +792,15 @@ fn test_batch_claim_panics_on_unsettled_call() {
     stakes.push_back(50_i128);
 
     // call_id=999 was never finalized
-    client.batch_claim_payouts(&registry_id, &999u64, &stakers, &stakes, &50_i128, &50_i128);
+    let result = client.try_batch_claim_payouts(
+        &registry_id,
+        &999u64,
+        &stakers,
+        &stakes,
+        &50_i128,
+        &50_i128,
+    );
+    assert_contract_error(result, OutcomeError::CallNotSettled);
 }
 
 #[test]
@@ -719,7 +828,14 @@ fn test_batch_claim_with_fee_deducted() {
     let _ = fee_collector;
 }
 
+#[test]
+fn test_mark_settled_requires_finalized_outcome() {
+    let env = Env::default();
+    let (_admin, registry_id, _oracle_secret, _oracle_pubkey, client) = setup_single_oracle(&env);
 
+    let result = client.try_mark_settled(&registry_id, &999u64);
+    assert_contract_error(result, OutcomeError::CallNotFinalized);
+}
 
 // -- upgrade / version -------------------------------------------------------
 #[test]
@@ -730,7 +846,6 @@ fn test_om_version_returns_contract_version() {
 }
 
 #[test]
-#[should_panic(expected = "not initialized")]
 fn test_om_upgrade_requires_admin_auth() {
     // upgrade() reads admin from instance storage before calling require_auth().
     // Calling it before initialize() panics with "not initialized", proving
@@ -740,7 +855,8 @@ fn test_om_upgrade_requires_admin_auth() {
     let contract_id = env.register_contract(None, OutcomeManager);
     let client = OutcomeManagerClient::new(&env, &contract_id);
     let fake_hash = BytesN::<32>::from_array(&env, &[0u8; 32]);
-    client.upgrade(&fake_hash); // panics: "not initialized"
+    let result = client.try_upgrade(&fake_hash);
+    assert_contract_error(result, OutcomeError::NotInitialized);
 }
 
 // -- Fuzz / property tests for claim_payout arithmetic -----------------------
@@ -767,17 +883,17 @@ fn test_fuzz_payout_many_ratios_no_panic() {
     // Representative matrix of ratios; none should overflow or panic
     let cases: &[(i128, i128, i128, u32)] = &[
         // (staker_winning, total_winning, total_losing, fee_bps)
-        (1,              1,                  0,          0),
-        (1,              1,                  1,          0),
-        (1,              1,                  1,       1000),
-        (1,              1,                  1,       5000),
-        (1,          1_000,          1_000_000,        100),
-        (500,        1_000,          1_000_000,        500),
-        (1_000,      1_000,                  1,          0),
-        (1_000_000,  1_000_000,      1_000_000,      1_000),
-        (1,              1,  1_000_000_000_000,          0),
-        (1, 1_000_000_000_000, 1_000_000_000_000,        0),
-        (500,        1_000,              1_000,       5_000),
+        (1, 1, 0, 0),
+        (1, 1, 1, 0),
+        (1, 1, 1, 1000),
+        (1, 1, 1, 5000),
+        (1, 1_000, 1_000_000, 100),
+        (500, 1_000, 1_000_000, 500),
+        (1_000, 1_000, 1, 0),
+        (1_000_000, 1_000_000, 1_000_000, 1_000),
+        (1, 1, 1_000_000_000_000, 0),
+        (1, 1_000_000_000_000, 1_000_000_000_000, 0),
+        (500, 1_000, 1_000, 5_000),
     ];
     for &(sw, tw, tl, fee) in cases {
         fuzz_claim_setup(sw, tw, tl, fee);
@@ -797,14 +913,7 @@ fn test_fuzz_100_winners_batch_all_claimed() {
         stakes.push_back(1_i128);
     }
 
-    client.batch_claim_payouts(
-        &registry_id,
-        &1u64,
-        &stakers,
-        &stakes,
-        &100_i128,
-        &100_i128,
-    );
+    client.batch_claim_payouts(&registry_id, &1u64, &stakers, &stakes, &100_i128, &100_i128);
 
     for i in 0..100u32 {
         assert!(client.has_claimed(&1u64, &stakers.get(i).unwrap()));
@@ -841,15 +950,21 @@ fn test_fuzz_asymmetric_1_trillion_vs_1() {
 }
 
 #[test]
-#[should_panic]
 fn test_fuzz_zero_staker_stake_panics() {
-    fuzz_claim_setup(0, 1, 1, 0);
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, 0);
+    let staker = Address::generate(&env);
+    let result = client.try_claim_payout(&registry_id, &1u64, &staker, &0, &1, &1);
+    assert_contract_error(result, OutcomeError::NothingToClaim);
 }
 
 #[test]
-#[should_panic]
 fn test_fuzz_zero_total_winning_panics() {
-    fuzz_claim_setup(1, 0, 1, 0);
+    let env = Env::default();
+    let (_, registry_id, client) = setup_with_fee(&env, 0);
+    let staker = Address::generate(&env);
+    let result = client.try_claim_payout(&registry_id, &1u64, &staker, &1, &0, &1);
+    assert_contract_error(result, OutcomeError::InvalidWinningStake);
 }
 
 // ─── Pause Mechanism Tests ─────────────────────────────────────────────────────
@@ -870,7 +985,6 @@ fn test_pause_and_unpause() {
 }
 
 #[test]
-#[should_panic(expected = "contract is paused")]
 fn test_submit_outcome_fails_when_paused() {
     let env = Env::default();
     let (_admin, registry_id, oracle_secret, oracle_pubkey, client) = setup_single_oracle(&env);
@@ -887,11 +1001,11 @@ fn test_submit_outcome_fails_when_paused() {
         signature: sign_outcome(&env, &oracle_secret, 1, 1, 100, 1000),
     };
 
-    client.submit_outcome(&registry_id, &signed, &0u64);
+    let result = client.try_submit_outcome(&registry_id, &signed, &0u64);
+    assert_contract_error(result, OutcomeError::ContractPaused);
 }
 
 #[test]
-#[should_panic(expected = "contract is paused")]
 fn test_claim_payout_fails_when_paused() {
     let env = Env::default();
     let (_admin, registry_id, _oracle_secret, _oracle_pubkey, client) = setup_single_oracle(&env);
@@ -900,7 +1014,7 @@ fn test_claim_payout_fails_when_paused() {
     env.mock_all_auths();
     client.pause();
 
-    client.claim_payout(
+    let result = client.try_claim_payout(
         &registry_id,
         &1u64,
         &staker,
@@ -908,6 +1022,7 @@ fn test_claim_payout_fails_when_paused() {
         &100_i128,
         &100_i128,
     );
+    assert_contract_error(result, OutcomeError::ContractPaused);
 }
 
 // ─── Oracle Submission Deadline Tests ─────────────────────────────────────────
@@ -939,7 +1054,6 @@ fn test_submission_within_window_succeeds() {
 }
 
 #[test]
-#[should_panic(expected = "submission outside allowed window")]
 fn test_submission_outside_window_fails() {
     let env = Env::default();
     let (_admin, registry_id, oracle_secret, oracle_pubkey, client) = setup_single_oracle(&env);
@@ -951,7 +1065,7 @@ fn test_submission_outside_window_fails() {
     let call_end_ts = 1000u64;
     // timestamp 1200 > call_end_ts(1000) + max_delay(50) = 1050
     let sig = sign_outcome(&env, &oracle_secret, call_id, 1, 100, 1200);
-    client.submit_outcome(
+    let result = client.try_submit_outcome(
         &registry_id,
         &SignedOutcome {
             call_id,
@@ -963,6 +1077,7 @@ fn test_submission_outside_window_fails() {
         },
         &call_end_ts,
     );
+    assert_contract_error(result, OutcomeError::SubmissionWindowExpired);
 }
 
 #[test]
@@ -975,4 +1090,3 @@ fn test_admin_can_update_max_submission_delay() {
     client.set_max_submission_delay(&3600u64);
     assert_eq!(client.get_max_submission_delay(), 3600u64);
 }
-
