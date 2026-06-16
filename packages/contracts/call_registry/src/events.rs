@@ -1,5 +1,5 @@
 use soroban_sdk::symbol_short;
-use soroban_sdk::{Address, Bytes, Env, Symbol};
+use soroban_sdk::{Address, Bytes, BytesN, Env, Symbol};
 
 pub const PARAM_MAX_STAKE_PER_USER: &str = "max_stake_per_user";
 pub const PARAM_MIN_STAKE: &str = "min_stake";
@@ -16,7 +16,7 @@ pub fn emit_call_created(
     end_ts: u64,
     token_address: &Address,
     pair_id: &Bytes,
-    ipfs_cid: &Bytes,
+    metadata_hash: &BytesN<32>,
     outcome_count: u32,
 ) {
     env.events().publish(
@@ -30,7 +30,7 @@ pub fn emit_call_created(
             end_ts,
             token_address.clone(),
             pair_id.clone(),
-            ipfs_cid.clone(),
+            metadata_hash.clone(),
             outcome_count,
         ),
     );
@@ -178,8 +178,8 @@ pub fn emit_call_metadata_updated(
     env: &Env,
     call_id: u64,
     creator: &Address,
-    old_cid: &Bytes,
-    new_cid: &Bytes,
+    old_hash: &BytesN<32>,
+    new_hash: &BytesN<32>,
     version: u32,
 ) {
     env.events().publish(
@@ -187,8 +187,8 @@ pub fn emit_call_metadata_updated(
         (
             call_id,
             creator.clone(),
-            old_cid.clone(),
-            new_cid.clone(),
+            old_hash.clone(),
+            new_hash.clone(),
             version,
         ),
     );
@@ -241,7 +241,7 @@ pub fn emit_xlm_call_created(
     end_ts: u64,
     token_address: &Address,
     pair_id: &Bytes,
-    ipfs_cid: &Bytes,
+    metadata_hash: &BytesN<32>,
     outcome_count: u32,
 ) {
     env.events().publish(
@@ -254,7 +254,7 @@ pub fn emit_xlm_call_created(
             end_ts,
             token_address.clone(),
             pair_id.clone(),
-            ipfs_cid.clone(),
+            metadata_hash.clone(),
             outcome_count,
         ),
     );

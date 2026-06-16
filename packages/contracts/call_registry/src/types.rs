@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Bytes, Map};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Map};
 
 /// Describes the condition used to determine whether a call resolves as UP.
 #[contracttype]
@@ -29,8 +29,8 @@ pub struct Call {
     pub token_address: Address,
     /// DexScreener pair ID for price data
     pub pair_id: Bytes,
-    /// IPFS content hash for call metadata
-    pub ipfs_cid: Bytes,
+    /// 32-byte hash of the IPFS CID or metadata (replaces full bytes to save storage)
+    pub metadata_hash: BytesN<32>,
     /// Number of possible outcomes (default: 2 for backward compatibility)
     pub outcome_count: u32,
     /// Map of outcome indices to total stake amounts

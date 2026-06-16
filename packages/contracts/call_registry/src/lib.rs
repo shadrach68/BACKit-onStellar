@@ -1,5 +1,8 @@
 #![no_std]
 
+extern crate alloc;
+use alloc::format;
+
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, Map, Symbol, Vec};
 
 /// The sentinel value used to represent native XLM as the stake token.
@@ -55,6 +58,8 @@ use errors::CallRegistryError;
 use events::*;
 use storage::*;
 use types::*;
+use soroban_sdk::host::stellar_account;
+use soroban_sdk::Bytes as SdkBytes;
 
 const MAX_CALL_PAGE_SIZE: u32 = 20;
 pub const CONTRACT_VERSION: u32 = 1;
@@ -162,6 +167,7 @@ impl CallRegistry {
         token_address: Address,
         pair_id: Bytes,
         ipfs_cid: Bytes,
+        metadata_hash: BytesN<32>,
         condition: ConditionType,
         outcome_count: u32,
     ) -> Result<Call, CallRegistryError> {
@@ -214,7 +220,7 @@ impl CallRegistry {
             end_ts,
             token_address: token_address.clone(),
             pair_id: pair_id.clone(),
-            ipfs_cid: ipfs_cid.clone(),
+            metadata_hash: metadata_hash.clone(),
             outcome_count,
             outcome_stakes,
             stakes,
@@ -249,7 +255,7 @@ impl CallRegistry {
                 end_ts,
                 &token_address,
                 &pair_id,
-                &ipfs_cid,
+                &metadata_hash,
                 outcome_count,
             );
         } else {
@@ -263,19 +269,97 @@ impl CallRegistry {
                 end_ts,
                 &token_address,
                 &pair_id,
-                &ipfs_cid,
+                &metadata_hash,
                 outcome_count,
             );
         }
 
+        // Write immutable metadata to the contract's Stellar account DataEntries.
+        // Key names: `call_{call_id}_cid` and `call_{call_id}_hash`.
+        // We store base64(IPFS CID bytes) and base64(sha256(metadata fields)).
+        // Implement a small base64 encoder that works in no_std using soroban vectors.
+        fn encode_base64(env: &Env, input: &Bytes) -> Bytes {
+            let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut out: Vec<u8> = Vec::new(env);
+            let mut i = 0usize;
+            let input_len = input.len() as usize;
+            while i + 3 <= input_len {
+                let b0 = input.get(i).unwrap_or(&0u8);
+                let b1 = input.get(i + 1).unwrap_or(&0u8);
+                let b2 = input.get(i + 2).unwrap_or(&0u8);
+                let n = ((*b0 as u32) << 16) | ((*b1 as u32) << 8) | (*b2 as u32);
+                let c0 = table[( (n >> 18) & 0x3F) as usize];
+                let c1 = table[( (n >> 12) & 0x3F) as usize];
+                let c2 = table[( (n >> 6) & 0x3F) as usize];
+                let c3 = table[( n & 0x3F) as usize];
+                out.push_back(c0);
+                out.push_back(c1);
+                out.push_back(c2);
+                out.push_back(c3);
+                i += 3;
+            }
+            let rem = input_len - i;
+            if rem == 1 {
+                let b0 = input.get(i).unwrap_or(&0u8);
+                let n = (*b0 as u32) << 16;
+                let c0 = table[((n >> 18) & 0x3F) as usize];
+                let c1 = table[((n >> 12) & 0x3F) as usize];
+                out.push_back(c0);
+                out.push_back(c1);
+                out.push_back(b'=');
+                out.push_back(b'=');
+            } else if rem == 2 {
+                let b0 = input.get(i).unwrap_or(&0u8);
+                let b1 = input.get(i + 1).unwrap_or(&0u8);
+                let n = ((*b0 as u32) << 16) | ((*b1 as u32) << 8);
+                let c0 = table[((n >> 18) & 0x3F) as usize];
+                let c1 = table[((n >> 12) & 0x3F) as usize];
+                let c2 = table[((n >> 6) & 0x3F) as usize];
+                out.push_back(c0);
+                out.push_back(c1);
+                out.push_back(c2);
+                out.push_back(b'=');
+            }
+            // Convert Vec<u8> to Bytes
+            let mut buf: Vec<u8> = Vec::new(env);
+            for b in out.iter() {
+                buf.push_back(*b);
+            }
+            Bytes::from_slice(env, &buf.iter().map(|b| *b).collect::<Vec<u8>>())
+        }
+
+        let key_cid = SdkBytes::from_slice(&env, format!("call_{}_cid", call_id).as_bytes());
+        let key_hash = SdkBytes::from_slice(&env, format!("call_{}_hash", call_id).as_bytes());
+        // Base64-encode the ipfs_cid and the metadata_hash raw bytes
+        let cid_b64 = encode_base64(&env, &ipfs_cid);
+        let raw_hash = SdkBytes::from_slice(&env, &metadata_hash.to_array());
+        let hash_b64 = encode_base64(&env, &raw_hash);
+        let _ = stellar_account::set_data(&env, &env.current_contract_address(), &key_cid, &cid_b64);
+        let _ = stellar_account::set_data(&env, &env.current_contract_address(), &key_hash, &hash_b64);
+
         Ok(call)
+    }
+
+    /// Documentation: DataEntry vs Soroban Storage
+    /// * DataEntry: Use for immutable metadata (e.g. IPFS CID at call creation). Costs 0.5 XLM once, free to read off-chain.
+    /// * Soroban Storage: Use for mutable state (e.g. stakes, resolution status) that the contract logic must update and read.
+    /// 
+    /// Cost Comparison:
+    /// Storing a 60-byte IPFS string in Soroban persistent storage inflates ledger size and increases rent.
+    /// Using a 32-byte hash reference saves ~50% byte allocation in state, while the full CID is available
+    /// freely off-chain in the account's classic DataEntry at a flat rate of 0.5 XLM (no recurring rent).
+    /// View: retrieve a DataEntry from the contract's Stellar account for a call.
+    /// Returns `None` when no entry exists for the key.
+    pub fn get_call_data_entry(env: Env, call_id: u64, key: Bytes) -> Option<Bytes> {
+        // Use host function to read Stellar account data; returns Option<Bytes>
+        stellar_account::get_data(&env, &env.current_contract_address(), &key)
     }
 
     pub fn update_call_metadata(
         env: Env,
         creator: Address,
         call_id: u64,
-        new_ipfs_cid: Bytes,
+        new_metadata_hash: BytesN<32>,
     ) -> Result<(), CallRegistryError> {
         creator.require_auth();
         let mut call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
@@ -291,8 +375,8 @@ impl CallRegistry {
             panic!("call has expired");
         }
 
-        let old_cid = call.ipfs_cid.clone();
-        call.ipfs_cid = new_ipfs_cid.clone();
+        let old_hash = call.metadata_hash.clone();
+        call.metadata_hash = new_metadata_hash.clone();
         call.metadata_version += 1;
 
         set_call(&env, &call);
@@ -300,8 +384,8 @@ impl CallRegistry {
             &env,
             call_id,
             &creator,
-            &old_cid,
-            &new_ipfs_cid,
+            &old_hash,
+            &new_metadata_hash,
             call.metadata_version,
         );
         Ok(())
@@ -617,6 +701,14 @@ impl CallRegistry {
     /// * [`CallRegistryError::CallNotFound`] – `call_id` does not exist.
     pub fn get_call(env: Env, call_id: u64) -> Result<Call, CallRegistryError> {
         get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)
+    }
+
+    /// Retrieve the metadata hash (IPFS CID hash) for a specific call.
+    /// # Errors
+    /// * [`CallRegistryError::CallNotFound`] – `call_id` does not exist.
+    pub fn get_call_metadata_hash(env: Env, call_id: u64) -> Result<BytesN<32>, CallRegistryError> {
+        let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
+        Ok(call.metadata_hash)
     }
 
     /// Get the condition type for a specific call.

@@ -3,7 +3,7 @@
 use soroban_sdk::{
     contract, contractimpl,
     testutils::{Address as _, Ledger as _},
-    Address, Bytes, Env,
+    Address, Bytes, BytesN, Env,
 };
 
 use crate::{types::ConditionType, CallRegistry, CallRegistryClient};
@@ -45,7 +45,7 @@ fn create_test_call(
 ) -> u64 {
     let token_address = Address::generate(env);
     let pair_id = Bytes::from_slice(env, b"USDC/XLM");
-    let ipfs_cid = Bytes::from_slice(env, b"QmTest");
+    let metadata_hash = BytesN::from_array(env, &[0u8; 32]);
 
     let call = client.create_call(
         creator,
@@ -55,7 +55,7 @@ fn create_test_call(
         &end_ts,
         &token_address,
         &pair_id,
-        &ipfs_cid,
+        &metadata_hash,
         &ConditionType::TargetAbove(100_000_000_i128),
         &2,
     );
@@ -309,7 +309,7 @@ fn test_fuzz_extreme_timestamp_near_max() {
     let creator = Address::generate(&env);
     let token_address = Address::generate(&env);
     let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-    let ipfs_cid = Bytes::from_slice(&env, b"QmTest");
+    let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
     let extreme_timestamps = [u64::MAX - 1, u64::MAX - 100, u64::MAX - 1000, u64::MAX / 2];
 
@@ -322,7 +322,7 @@ fn test_fuzz_extreme_timestamp_near_max() {
             &end_ts,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000),
             &2,
         );

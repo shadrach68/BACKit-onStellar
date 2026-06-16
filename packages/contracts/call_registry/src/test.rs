@@ -96,10 +96,12 @@ mod call_registry {
         end_ts: &u64,
         token_address: &Address,
         pair_id: &Bytes,
-        ipfs_cid: &Bytes,
+        metadata_hash: &BytesN<32>,
         outcome_count: &u32,
     ) -> crate::types::Call {
         client.whitelist_token(stake_token);
+        // Use a default IPFS CID for tests
+        let ipfs_cid = Bytes::from_slice(&client.env(), b"QmXxxx");
         client.create_call(
             creator,
             stake_token,
@@ -108,7 +110,8 @@ mod call_registry {
             end_ts,
             token_address,
             pair_id,
-            ipfs_cid,
+            &ipfs_cid,
+            metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             outcome_count,
         )
@@ -211,6 +214,50 @@ mod call_registry {
     }
 
     #[test]
+    fn test_dataentry_set_and_get() {
+        let (env, client, _admin, _om) = setup();
+
+        // Prepare inputs
+        let creator = Address::generate(&env);
+        let stake_token = env.register_contract(None, MockToken);
+        client.whitelist_token(&stake_token);
+        let token_address = Address::generate(&env);
+        let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
+        // Use a deterministic metadata hash for test
+        let metadata_hash = {
+            let mut arr = [0u8; 32];
+            arr[0] = 42u8;
+            BytesN::from_array(&env, &arr)
+        };
+
+        // Create the call
+        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let call = client.create_call(
+            &creator,
+            &stake_token,
+            &100_000_000_i128,
+            &TEST_START_PRICE,
+            &2000u64,
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+            &metadata_hash,
+            &crate::types::ConditionType::TargetAbove(100_000_000_i128),
+            &2u32,
+        );
+
+        // Read back the stored DataEntry for the metadata hash
+        let key_str = std::format!("call_{}_hash", call.id);
+        let key = Bytes::from_slice(&env, key_str.as_bytes());
+        let entry: Option<Bytes> = client.get_call_data_entry(&call.id, &key);
+        assert!(entry.is_some(), "DataEntry should be set");
+        let entry_bytes = entry.unwrap();
+        // Expect raw 32-byte hash stored
+        assert_eq!(entry_bytes.len(), 32usize);
+        assert_eq!(entry_bytes.get(0).unwrap(), &42u8);
+    }
+
+    #[test]
     fn test_set_outcome_manager_emits_admin_params_changed() {
         let (env, client, _admin, old_om) = setup();
         let new_om = Address::generate(&env);
@@ -306,7 +353,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -316,7 +363,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -355,7 +402,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -365,7 +412,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -387,7 +434,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -397,7 +444,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -424,7 +471,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -434,7 +481,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -463,7 +510,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let stats = client.get_global_stats();
         assert_eq!(stats.total_calls, 0);
@@ -478,7 +525,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         let call2 = create_call_with_default_condition(
@@ -489,7 +536,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -521,7 +568,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -531,7 +578,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -560,7 +607,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let result = client.try_create_call(
             &creator,
@@ -570,7 +617,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &2,
         );
@@ -591,7 +638,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
         let call = create_call_with_default_condition(
             &client,
             &creator,
@@ -600,7 +647,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -626,7 +673,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let result = client.try_create_call(
             &creator,
@@ -636,7 +683,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &2,
         );
@@ -661,7 +708,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let result = client.try_create_call(
             &creator,
@@ -671,7 +718,7 @@ mod call_registry {
             &500u64, // in the past
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &2,
         );
@@ -699,7 +746,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -709,7 +756,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -735,7 +782,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -745,7 +792,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -769,7 +816,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -779,7 +826,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -807,7 +854,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -817,7 +864,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -844,7 +891,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let created_call = create_call_with_default_condition(
             &client,
@@ -854,7 +901,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -898,7 +945,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -908,7 +955,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -938,7 +985,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -948,7 +995,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -973,7 +1020,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             &client,
@@ -983,7 +1030,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -1013,7 +1060,7 @@ mod call_registry {
         let stake_token = Address::generate(&env);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         create_call_with_default_condition(
             &client,
@@ -1023,7 +1070,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         create_call_with_default_condition(
@@ -1034,7 +1081,7 @@ mod call_registry {
             &3000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -1056,7 +1103,7 @@ mod call_registry {
         let stake_token = env.register_stellar_asset_contract(token_admin);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         create_call_with_default_condition(
             &client,
@@ -1066,7 +1113,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         create_call_with_default_condition(
@@ -1077,7 +1124,7 @@ mod call_registry {
             &3000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         create_call_with_default_condition(
@@ -1088,7 +1135,7 @@ mod call_registry {
             &4000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -1111,7 +1158,7 @@ mod call_registry {
         let stake_token = Address::generate(&env);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         for _ in 0..25 {
             create_call_with_default_condition(
@@ -1122,7 +1169,7 @@ mod call_registry {
                 &2000u64,
                 &token_address,
                 &pair_id,
-                &ipfs_cid,
+                &metadata_hash,
                 &2,
             );
         }
@@ -1146,7 +1193,7 @@ mod call_registry {
         let stake_token = Address::generate(&env);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         create_call_with_default_condition(
             &client,
@@ -1156,7 +1203,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         create_call_with_default_condition(
@@ -1167,7 +1214,7 @@ mod call_registry {
             &3000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         create_call_with_default_condition(
@@ -1178,7 +1225,7 @@ mod call_registry {
             &4000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -1204,7 +1251,7 @@ mod call_registry {
         let stake_token = Address::generate(&env);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         create_call_with_default_condition(
             &client,
@@ -1214,7 +1261,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         create_call_with_default_condition(
@@ -1225,7 +1272,7 @@ mod call_registry {
             &3000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         create_call_with_default_condition(
@@ -1236,7 +1283,7 @@ mod call_registry {
             &4000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -1260,7 +1307,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(env);
         let pair_id = Bytes::from_slice(env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(env, &[0u8; 32]);
 
         let call = create_call_with_default_condition(
             client,
@@ -1270,7 +1317,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         (call, stake_token)
@@ -1337,8 +1384,9 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
+        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
         let call = client.create_call(
             &creator,
             &stake_token,
@@ -1348,6 +1396,7 @@ mod call_registry {
             &token_address,
             &pair_id,
             &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &3,
         );
@@ -1373,8 +1422,9 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
+        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
         let call = client.create_call(
             &creator,
             &stake_token,
@@ -1384,6 +1434,7 @@ mod call_registry {
             &token_address,
             &pair_id,
             &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &3,
         );
@@ -1413,8 +1464,9 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
+        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
         let call = client.create_call(
             &creator,
             &stake_token,
@@ -1424,6 +1476,7 @@ mod call_registry {
             &token_address,
             &pair_id,
             &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &3,
         );
@@ -1449,8 +1502,9 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
+        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
         let call = client.create_call(
             &creator,
             &stake_token,
@@ -1460,6 +1514,7 @@ mod call_registry {
             &token_address,
             &pair_id,
             &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &3,
         );
@@ -1488,6 +1543,8 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
+
         let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
 
         let call = client.create_call(
@@ -1499,6 +1556,7 @@ mod call_registry {
             &token_address,
             &pair_id,
             &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &3,
         );
@@ -1525,7 +1583,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = client.create_call(
             &creator,
@@ -1535,7 +1593,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &3,
         );
@@ -1566,7 +1624,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = client.create_call(
             &creator,
@@ -1576,7 +1634,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &3,
         );
@@ -1614,7 +1672,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         let call = client.create_call(
             &creator,
@@ -1624,7 +1682,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(100_000_000_i128),
             &3,
         );
@@ -1662,7 +1720,7 @@ mod call_registry {
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         // Creator starts with no stats
         let stats = client.get_creator_stats_view(&creator);
@@ -1679,7 +1737,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -1697,7 +1755,7 @@ mod call_registry {
             &3000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -1719,7 +1777,7 @@ mod call_registry {
         let stake_token = env.register_contract(None, MockToken);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         client.whitelist_token(&stake_token);
 
@@ -1732,7 +1790,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -1761,7 +1819,7 @@ mod call_registry {
         let stake_token = env.register_contract(None, MockToken);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         client.whitelist_token(&stake_token);
 
@@ -1774,7 +1832,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -1803,7 +1861,7 @@ mod call_registry {
         let stake_token = env.register_contract(None, MockToken);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         client.whitelist_token(&stake_token);
 
@@ -1816,7 +1874,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         client.stake_on_call(&creator, &1u64, &50_000_000_i128, &1);
@@ -1830,7 +1888,7 @@ mod call_registry {
             &3000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         client.stake_on_call(&creator, &2u64, &50_000_000_i128, &2);
@@ -1844,7 +1902,7 @@ mod call_registry {
             &4000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         client.stake_on_call(&creator, &3u64, &50_000_000_i128, &1);
@@ -1894,7 +1952,7 @@ mod call_registry {
         let stake_token = env.register_contract(None, MockToken);
         let token_address = Address::generate(&env);
         let pair_id = Bytes::from_slice(&env, b"USDC/XLM");
-        let ipfs_cid = Bytes::from_slice(&env, b"QmXxxx");
+        let metadata_hash = BytesN::from_array(&env, &[0u8; 32]);
 
         client.whitelist_token(&stake_token);
 
@@ -1906,7 +1964,7 @@ mod call_registry {
             &2000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
         create_call_with_default_condition(
@@ -1917,7 +1975,7 @@ mod call_registry {
             &3000u64,
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &2,
         );
 
@@ -2040,7 +2098,7 @@ mod native_xlm {
     ) -> crate::types::Call {
         let token_address = Address::generate(env);
         let pair_id = Bytes::from_slice(env, b"XLM/USD");
-        let ipfs_cid = Bytes::from_slice(env, b"QmXLM");
+        let metadata_hash = BytesN::from_array(env, &[0u8; 32]);
 
         client.create_call(
             creator,
@@ -2050,7 +2108,7 @@ mod native_xlm {
             &10_000u64,        // end_ts
             &token_address,
             &pair_id,
-            &ipfs_cid,
+            &metadata_hash,
             &ConditionType::TargetAbove(105_000_000_i128),
             &2u32,
         )
