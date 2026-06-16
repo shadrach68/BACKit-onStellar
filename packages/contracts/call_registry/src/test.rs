@@ -1256,11 +1256,6 @@ mod call_registry {
         client: &CallRegistryClient<'_>,
         creator: &Address,
     ) -> (crate::types::Call, Address) {
-    fn make_call(
-        env: &Env,
-        client: &CallRegistryClient<'_>,
-        creator: &Address,
-    ) -> (crate::types::Call, Address) {
         let stake_token = env.register_contract(None, MockToken);
         client.whitelist_token(&stake_token);
         let token_address = Address::generate(env);
@@ -2296,4 +2291,3 @@ mod native_xlm {
         assert_eq!(down_stake, quarter_xlm);
     }
 }
-

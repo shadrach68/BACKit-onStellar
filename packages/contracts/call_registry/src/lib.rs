@@ -50,7 +50,6 @@ mod storage;
 #[cfg(test)]
 mod test;
 mod types;
-mod types;
 
 use backit_shared::{OUTCOME_DOWN, OUTCOME_UP};
 use errors::CallRegistryError;
@@ -96,10 +95,6 @@ fn evaluate_condition_impl(condition: &ConditionType, start_price: i128, end_pri
             end_price >= *min && end_price <= *max
         }
     }
-}
-
-fn transfer_token(env: &Env, stake_token: &Address, from: &Address, to: &Address, amount: i128) {
-    token::Client::new(env, stake_token).transfer(from, to, &amount);
 }
 
 #[contractimpl]
@@ -1109,4 +1104,3 @@ impl CallRegistry {
         is_native_xlm(&env, &addr)
     }
 }
-
