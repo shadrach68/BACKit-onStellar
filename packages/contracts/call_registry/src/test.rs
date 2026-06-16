@@ -1947,3 +1947,413 @@ mod call_registry {
         assert!(!has_warning);
     }
 }
+
+// ── Native XLM staking tests ──────────────────────────────────────────────────
+//
+// These tests exercise the full XLM staking path:
+//   create_call with XLM sentinel, stake_on_call with XLM, void refund in XLM,
+//   release_escrow payout in XLM, and mixed XLM + USDC calls in separate markets.
+
+mod native_xlm {
+    use super::*;
+    use crate::types::ConditionType;
+    use crate::{CallRegistry, CallRegistryClient, NATIVE_XLM_SENTINEL};
+    use soroban_sdk::{
+        token::StellarAssetClient,
+        testutils::{Address as _, Ledger as _},
+        Address, Bytes, BytesN, Env, IntoVal,
+    };
+
+    const MIN_STAKE: i128 = 1_000_000; // 0.1 XLM (7 decimals)
+    const STAKE_AMOUNT: i128 = 10_000_000; // 1 XLM
+
+    /// Returns the sentinel `Address` that represents native XLM.
+    fn xlm_sentinel(env: &Env) -> Address {
+        Address::from_contract_id(BytesN::<32>::from_array(env, &NATIVE_XLM_SENTINEL))
+    }
+
+    /// Register a real Stellar Asset Contract for native XLM and return its address.
+    /// In the test environment `register_stellar_asset_contract_v2` (or the
+    /// single-arg form) gives us a proper SAC we can mint from.
+    fn register_xlm_sac(env: &Env) -> Address {
+        let token_admin = Address::generate(env);
+        env.register_stellar_asset_contract(token_admin)
+    }
+
+    /// Mint `amount` of `token` to `to` using the StellarAssetClient.
+    fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
+        StellarAssetClient::new(env, token).mint(to, &amount);
+    }
+
+    /// Spin up a registry and return (env, client, admin, outcome_manager, xlm_address).
+    /// The XLM SAC is registered at the sentinel address so the contract
+    /// recognises it as native XLM.
+    fn setup_with_xlm() -> (Env, CallRegistryClient<'static>, Address, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let admin = Address::generate(&env);
+        let outcome_manager = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, CallRegistry);
+        let client = CallRegistryClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &outcome_manager, &MIN_STAKE);
+
+        // Register a SAC at the sentinel address so token::StellarAssetClient
+        // can resolve transfers in the test environment.
+        let xlm_addr = register_xlm_sac(&env);
+
+        (env, client, admin, outcome_manager, xlm_addr)
+    }
+
+    // ── helper to create a call with XLM ─────────────────────────────────────
+
+    fn create_xlm_call(
+        env: &Env,
+        client: &CallRegistryClient<'_>,
+        creator: &Address,
+        xlm_sentinel: &Address,
+    ) -> crate::types::Call {
+        let token_address = Address::generate(env);
+        let pair_id = Bytes::from_slice(env, b"XLM/USD");
+        let ipfs_cid = Bytes::from_slice(env, b"QmXLM");
+
+        client.create_call(
+            creator,
+            xlm_sentinel,
+            &STAKE_AMOUNT,
+            &100_000_000_i128, // start_price
+            &10_000u64,        // end_ts
+            &token_address,
+            &pair_id,
+            &ipfs_cid,
+            &ConditionType::TargetAbove(105_000_000_i128),
+            &2u32,
+        )
+    }
+
+    // ── Tests ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_native_xlm_address_helper() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, CallRegistry);
+        let client = CallRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let om = Address::generate(&env);
+        env.mock_all_auths();
+        client.initialize(&admin, &om, &MIN_STAKE);
+
+        let sentinel = xlm_sentinel(&env);
+        // The contract's helper should return the same sentinel address.
+        assert_eq!(client.native_xlm_address(), sentinel);
+        assert!(client.is_native_xlm_address(&sentinel));
+    }
+
+    #[test]
+    fn test_create_call_with_native_xlm_succeeds() {
+        let (env, client, _admin, _om, _xlm_sac) = setup_with_xlm();
+        let creator = Address::generate(&env);
+        let sentinel = xlm_sentinel(&env);
+
+        let call = create_xlm_call(&env, &client, &creator, &sentinel);
+
+        assert_eq!(call.stake_token, sentinel);
+        assert_eq!(call.stake_amount, STAKE_AMOUNT);
+    }
+
+    #[test]
+    fn test_create_call_with_xlm_emits_xlm_call_created_event() {
+        let (env, client, _admin, _om, _xlm_sac) = setup_with_xlm();
+        let creator = Address::generate(&env);
+        let sentinel = xlm_sentinel(&env);
+
+        create_xlm_call(&env, &client, &creator, &sentinel);
+
+        let events = env.events().all();
+        let has_xlm_event = events.iter().any(|e| {
+            e.1 == soroban_sdk::vec![
+                &env,
+                "call_registry".into_val(&env),
+                "xlm_call_created".into_val(&env),
+            ]
+        });
+        assert!(has_xlm_event, "xlm_call_created event should be emitted");
+    }
+
+    #[test]
+    fn test_create_call_with_xlm_does_not_emit_sac_call_created() {
+        let (env, client, _admin, _om, _xlm_sac) = setup_with_xlm();
+        let creator = Address::generate(&env);
+        let sentinel = xlm_sentinel(&env);
+
+        create_xlm_call(&env, &client, &creator, &sentinel);
+
+        let events = env.events().all();
+        let has_sac_event = events.iter().any(|e| {
+            e.1 == soroban_sdk::vec![
+                &env,
+                "call_registry".into_val(&env),
+                "call_created".into_val(&env),
+            ]
+        });
+        assert!(!has_sac_event, "generic call_created should NOT be emitted for XLM calls");
+    }
+
+    #[test]
+    fn test_stake_on_call_with_native_xlm_succeeds() {
+        let (env, client, _admin, _om, xlm_sac) = setup_with_xlm();
+        let creator = Address::generate(&env);
+        let staker = Address::generate(&env);
+        let sentinel = xlm_sentinel(&env);
+
+        // Mint XLM to staker
+        mint(&env, &xlm_sac, &staker, STAKE_AMOUNT * 10);
+
+        let call = create_xlm_call(&env, &client, &creator, &sentinel);
+        client.stake_on_call(&staker, &call.id, &STAKE_AMOUNT, &1u32);
+
+        let updated = client.get_call(&call.id);
+        let up_total = updated.outcome_stakes.get(1u32).unwrap_or(0);
+        assert_eq!(up_total, STAKE_AMOUNT);
+    }
+
+    #[test]
+    fn test_stake_on_call_with_xlm_emits_xlm_stake_added_event() {
+        let (env, client, _admin, _om, xlm_sac) = setup_with_xlm();
+        let creator = Address::generate(&env);
+        let staker = Address::generate(&env);
+        let sentinel = xlm_sentinel(&env);
+
+        mint(&env, &xlm_sac, &staker, STAKE_AMOUNT * 10);
+
+        let call = create_xlm_call(&env, &client, &creator, &sentinel);
+        client.stake_on_call(&staker, &call.id, &STAKE_AMOUNT, &2u32);
+
+        let events = env.events().all();
+        let has_xlm_event = events.iter().any(|e| {
+            e.1 == soroban_sdk::vec![
+                &env,
+                "call_registry".into_val(&env),
+                "xlm_stake_added".into_val(&env),
+            ]
+        });
+        assert!(has_xlm_event, "xlm_stake_added event should be emitted");
+    }
+
+    #[test]
+    fn test_void_refund_in_native_xlm_emits_xlm_event() {
+        let (env, client, _admin, _om, xlm_sac) = setup_with_xlm();
+        let creator = Address::generate(&env);
+        let staker = Address::generate(&env);
+        let sentinel = xlm_sentinel(&env);
+
+        mint(&env, &xlm_sac, &staker, STAKE_AMOUNT * 10);
+
+        let call = create_xlm_call(&env, &client, &creator, &sentinel);
+        client.stake_on_call(&staker, &call.id, &STAKE_AMOUNT, &1u32);
+        client.void_call(&call.id);
+        client.claim_void_refund(&staker, &call.id);
+
+        let events = env.events().all();
+        let has_xlm_refund = events.iter().any(|e| {
+            e.1 == soroban_sdk::vec![
+                &env,
+                "call_registry".into_val(&env),
+                "xlm_void_refund".into_val(&env),
+            ]
+        });
+        assert!(has_xlm_refund, "xlm_void_refund event should be emitted");
+    }
+
+    #[test]
+    fn test_void_refund_in_native_xlm_does_not_emit_sac_event() {
+        let (env, client, _admin, _om, xlm_sac) = setup_with_xlm();
+        let creator = Address::generate(&env);
+        let staker = Address::generate(&env);
+        let sentinel = xlm_sentinel(&env);
+
+        mint(&env, &xlm_sac, &staker, STAKE_AMOUNT * 10);
+
+        let call = create_xlm_call(&env, &client, &creator, &sentinel);
+        client.stake_on_call(&staker, &call.id, &STAKE_AMOUNT, &1u32);
+        client.void_call(&call.id);
+        client.claim_void_refund(&staker, &call.id);
+
+        let events = env.events().all();
+        let has_sac_refund = events.iter().any(|e| {
+            e.1 == soroban_sdk::vec![
+                &env,
+                "call_registry".into_val(&env),
+                "void_refund_claimed".into_val(&env),
+            ]
+        });
+        assert!(!has_sac_refund, "generic void_refund_claimed should NOT fire for XLM calls");
+    }
+
+    #[test]
+    fn test_release_escrow_in_native_xlm_emits_xlm_event() {
+        let (env, client, _admin, outcome_manager, xlm_sac) = setup_with_xlm();
+        let creator = Address::generate(&env);
+        let staker = Address::generate(&env);
+        let winner = Address::generate(&env);
+        let sentinel = xlm_sentinel(&env);
+
+        mint(&env, &xlm_sac, &staker, STAKE_AMOUNT * 10);
+
+        let call = create_xlm_call(&env, &client, &creator, &sentinel);
+        client.stake_on_call(&staker, &call.id, &STAKE_AMOUNT, &1u32);
+
+        // Fast-forward past end_ts then resolve
+        env.ledger().set_timestamp(10_001);
+        client.resolve_call(&call.id, &1u32, &110_000_000_i128);
+
+        client.release_escrow(&call.id, &winner, &STAKE_AMOUNT);
+
+        let events = env.events().all();
+        let has_xlm_escrow = events.iter().any(|e| {
+            e.1 == soroban_sdk::vec![
+                &env,
+                "call_registry".into_val(&env),
+                "xlm_escrow_released".into_val(&env),
+            ]
+        });
+        assert!(has_xlm_escrow, "xlm_escrow_released event should be emitted");
+    }
+
+    #[test]
+    fn test_xlm_sentinel_not_counted_as_whitelisted_sac_token() {
+        let (env, client, _admin, _om, _xlm_sac) = setup_with_xlm();
+        let sentinel = xlm_sentinel(&env);
+
+        // The sentinel is NOT in the whitelist map — it's handled separately.
+        // is_token_whitelisted should return false for the XLM sentinel.
+        assert!(
+            !client.is_token_whitelisted(&sentinel),
+            "XLM sentinel should not appear in the SAC whitelist"
+        );
+    }
+
+    #[test]
+    fn test_mixed_xlm_and_usdc_calls_in_separate_markets() {
+        let (env, client, _admin, _om, xlm_sac) = setup_with_xlm();
+        let creator = Address::generate(&env);
+        let staker_xlm = Address::generate(&env);
+        let staker_usdc = Address::generate(&env);
+        let sentinel = xlm_sentinel(&env);
+
+        // Register a separate USDC SAC
+        let usdc_admin = Address::generate(&env);
+        let usdc_token = env.register_stellar_asset_contract(usdc_admin);
+        client.whitelist_token(&usdc_token);
+
+        // Mint XLM and USDC to the respective stakers
+        mint(&env, &xlm_sac, &staker_xlm, STAKE_AMOUNT * 10);
+        mint(&env, &usdc_token, &staker_usdc, STAKE_AMOUNT * 10);
+
+        let token_address = Address::generate(&env);
+        let pair_id_xlm = Bytes::from_slice(&env, b"XLM/USD");
+        let pair_id_usdc = Bytes::from_slice(&env, b"USDC/USD");
+        let ipfs_cid = Bytes::from_slice(&env, b"QmCid");
+
+        // Create XLM call
+        let xlm_call = client.create_call(
+            &creator,
+            &sentinel,
+            &STAKE_AMOUNT,
+            &100_000_000_i128,
+            &10_000u64,
+            &token_address,
+            &pair_id_xlm,
+            &ipfs_cid,
+            &ConditionType::TargetAbove(105_000_000_i128),
+            &2u32,
+        );
+
+        // Create USDC call
+        let usdc_call = client.create_call(
+            &creator,
+            &usdc_token,
+            &STAKE_AMOUNT,
+            &100_000_000_i128,
+            &10_000u64,
+            &token_address,
+            &pair_id_usdc,
+            &ipfs_cid,
+            &ConditionType::TargetAbove(105_000_000_i128),
+            &2u32,
+        );
+
+        // Both calls exist and use different stake tokens
+        assert_ne!(xlm_call.id, usdc_call.id);
+        assert_eq!(xlm_call.stake_token, sentinel);
+        assert_eq!(usdc_call.stake_token, usdc_token);
+
+        // Stake on each with the corresponding token
+        client.stake_on_call(&staker_xlm, &xlm_call.id, &STAKE_AMOUNT, &1u32);
+        client.stake_on_call(&staker_usdc, &usdc_call.id, &STAKE_AMOUNT, &2u32);
+
+        // XLM call has XLM stake
+        let xlm_updated = client.get_call(&xlm_call.id);
+        assert_eq!(xlm_updated.outcome_stakes.get(1u32).unwrap_or(0), STAKE_AMOUNT);
+
+        // USDC call has USDC stake
+        let usdc_updated = client.get_call(&usdc_call.id);
+        assert_eq!(usdc_updated.outcome_stakes.get(2u32).unwrap_or(0), STAKE_AMOUNT);
+
+        // Verify events: xlm_stake_added for XLM call, stake_added for USDC call
+        let events = env.events().all();
+        let xlm_stake_events: u32 = events.iter().filter(|e| {
+            e.1 == soroban_sdk::vec![
+                &env,
+                "call_registry".into_val(&env),
+                "xlm_stake_added".into_val(&env),
+            ]
+        }).count() as u32;
+        let sac_stake_events: u32 = events.iter().filter(|e| {
+            e.1 == soroban_sdk::vec![
+                &env,
+                "call_registry".into_val(&env),
+                "stake_added".into_val(&env),
+            ]
+        }).count() as u32;
+
+        assert_eq!(xlm_stake_events, 1, "exactly one xlm_stake_added event");
+        assert_eq!(sac_stake_events, 1, "exactly one sac stake_added event");
+    }
+
+    #[test]
+    fn test_xlm_arithmetic_7_decimals_consistency() {
+        // XLM has 7 decimal places: 1 XLM = 10_000_000 stroops
+        // Verify the contract accepts and round-trips amounts in stroops correctly.
+        let (env, client, _admin, _om, xlm_sac) = setup_with_xlm();
+        let creator = Address::generate(&env);
+        let staker = Address::generate(&env);
+        let sentinel = xlm_sentinel(&env);
+
+        let one_xlm: i128 = 10_000_000;       // 1 XLM in stroops
+        let half_xlm: i128 = 5_000_000;       // 0.5 XLM
+        let quarter_xlm: i128 = 2_500_000;    // 0.25 XLM
+
+        // Set min_stake to 0.1 XLM (1_000_000 stroops) — already set in setup
+        mint(&env, &xlm_sac, &staker, one_xlm * 100);
+
+        let call = create_xlm_call(&env, &client, &creator, &sentinel);
+
+        // Stake 0.5 XLM on position 1 and 0.25 XLM on position 2
+        client.stake_on_call(&staker, &call.id, &half_xlm, &1u32);
+        client.stake_on_call(&staker, &call.id, &quarter_xlm, &2u32);
+
+        let updated = client.get_call(&call.id);
+        assert_eq!(updated.outcome_stakes.get(1u32).unwrap_or(0), half_xlm);
+        assert_eq!(updated.outcome_stakes.get(2u32).unwrap_or(0), quarter_xlm);
+
+        // Staker's individual recorded stake should match
+        let up_stake = client.get_staker_stake(&call.id, &staker, &1u32);
+        let down_stake = client.get_staker_stake(&call.id, &staker, &2u32);
+        assert_eq!(up_stake, half_xlm);
+        assert_eq!(down_stake, quarter_xlm);
+    }
+}

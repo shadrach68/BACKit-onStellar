@@ -164,10 +164,12 @@ impl CallRegistry {
         }
 
         let config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
-        if !config
-            .whitelisted_tokens
-            .get(stake_token.clone())
-            .unwrap_or(false)
+        // Native XLM (sentinel address) is always allowed; SAC tokens must be whitelisted.
+        if !is_native_xlm(&env, &stake_token)
+            && !config
+                .whitelisted_tokens
+                .get(stake_token.clone())
+                .unwrap_or(false)
         {
             panic!("stake token not whitelisted");
         }
@@ -215,19 +217,34 @@ impl CallRegistry {
         
         extend_storage_ttl(&env);
 
-        emit_call_created(
-            &env,
-            call_id,
-            &creator,
-            &stake_token,
-            stake_amount,
-            start_price,
-            end_ts,
-            &token_address,
-            &pair_id,
-            &ipfs_cid,
-            outcome_count,
-        );
+        if is_native_xlm(&env, &stake_token) {
+            emit_xlm_call_created(
+                &env,
+                call_id,
+                &creator,
+                stake_amount,
+                start_price,
+                end_ts,
+                &token_address,
+                &pair_id,
+                &ipfs_cid,
+                outcome_count,
+            );
+        } else {
+            emit_call_created(
+                &env,
+                call_id,
+                &creator,
+                &stake_token,
+                stake_amount,
+                start_price,
+                end_ts,
+                &token_address,
+                &pair_id,
+                &ipfs_cid,
+                outcome_count,
+            );
+        }
 
         Ok(call)
     }
@@ -363,8 +380,8 @@ impl CallRegistry {
             panic!("Stake exceeds max_stake_per_user cap");
         }
 
-        let token_client = token::Client::new(&env, &call.stake_token);
-        token_client.transfer(&staker, &env.current_contract_address(), &amount);
+        // Transfer tokens in — supports both native XLM and SAC-wrapped tokens.
+        transfer_token(&env, &call.stake_token, &staker, &env.current_contract_address(), amount);
 
         // Update stake maps with generalized position support
         let current_total = call.outcome_stakes.get(position).unwrap_or(0);
@@ -383,7 +400,12 @@ impl CallRegistry {
         record_stake(&env, &staker, amount);
         extend_storage_ttl(&env);
 
-        emit_stake_added(&env, call_id, &staker, amount, position);
+        // Emit distinct XLM event so the indexer can differentiate XLM from USDC volume.
+        if is_native_xlm(&env, &call.stake_token) {
+            emit_xlm_stake_added(&env, call_id, &staker, amount, position);
+        } else {
+            emit_stake_added(&env, call_id, &staker, amount, position);
+        }
 
         Ok(call)
     }
@@ -511,8 +533,13 @@ impl CallRegistry {
 
         let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
 
-        let token_client = token::Client::new(&env, &call.stake_token);
-        token_client.transfer(&env.current_contract_address(), &to, &amount);
+        // Dispatch to native XLM or SAC-wrapped token path.
+        transfer_token(&env, &call.stake_token, &env.current_contract_address(), &to, amount);
+
+        // Emit a distinct XLM event so the indexer can track XLM payout volume.
+        if is_native_xlm(&env, &call.stake_token) {
+            emit_xlm_escrow_released(&env, call_id, &to, amount);
+        }
 
         Ok(())
     }
@@ -872,9 +899,24 @@ impl CallRegistry {
         set_void_refund_claimed(&env, call_id, &staker);
         extend_storage_ttl(&env);
 
-        let token_client = token::Client::new(&env, &call.stake_token);
-        token_client.transfer(&env.current_contract_address(), &staker, &total_refund);
+        // Dispatch to native XLM or SAC-wrapped token path.
+        transfer_token(&env, &call.stake_token, &env.current_contract_address(), &staker, total_refund);
 
-        emit_void_refund_claimed(&env, call_id, &staker, total_refund);
+        if is_native_xlm(&env, &call.stake_token) {
+            emit_xlm_void_refund_claimed(&env, call_id, &staker, total_refund);
+        } else {
+            emit_void_refund_claimed(&env, call_id, &staker, total_refund);
+        }
+    }
+
+    /// Returns the sentinel `Address` that represents native XLM.
+    /// Pass this as `stake_token` in `create_call` or `stake_on_call` to use native XLM.
+    pub fn native_xlm_address(env: Env) -> Address {
+        Address::from_contract_id(BytesN::<32>::from_array(&env, &NATIVE_XLM_SENTINEL))
+    }
+
+    /// Returns `true` when `addr` is the native XLM sentinel.
+    pub fn is_native_xlm_address(env: Env, addr: Address) -> bool {
+        is_native_xlm(&env, &addr)
     }
 }
