@@ -45,12 +45,13 @@ mod errors;
 mod events;
 #[cfg(test)]
 mod fuzz_tests;
+mod shares;
 mod storage;
 #[cfg(test)]
 mod test;
 mod types;
 
-use backit_shared::{is_valid_outcome, OUTCOME_DOWN, OUTCOME_UP};
+use backit_shared::{OUTCOME_DOWN, OUTCOME_UP};
 use errors::CallRegistryError;
 use events::*;
 use storage::*;
@@ -123,6 +124,7 @@ impl CallRegistry {
             metadata_version: 0,
             paused: false,
             staking_cutoff_secs: 300,
+            share_wasm_hash: None,
         };
 
         set_config(&env, &config);
@@ -147,6 +149,19 @@ impl CallRegistry {
             .set(&Symbol::new(&env, "xlm_sac_addr"), &xlm_sac);
     }
 
+    /// Set the share token WASM hash (admin only).
+    /// Must be called after initialize before create_call can deploy share tokens.
+    pub fn set_share_wasm_hash(
+        env: Env,
+        share_wasm_hash: BytesN<32>,
+    ) -> Result<(), CallRegistryError> {
+        let mut config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
+        config.admin.require_auth();
+        config.share_wasm_hash = Some(share_wasm_hash);
+        set_config(&env, &config);
+        Ok(())
+    }
+
     /// Create a new prediction call.
     /// # Errors
     /// * [`CallRegistryError::InvalidStakeAmount`] – `stake_amount` ≤ 0.
@@ -167,6 +182,7 @@ impl CallRegistry {
     ) -> Result<Call, CallRegistryError> {
         creator.require_auth();
 
+        let mut share_tokens = Map::new(&env);
         let config = get_config(&env).ok_or(CallRegistryError::NotInitialized)?;
         assert!(!config.paused, "Contract is paused");
         if stake_amount < config.min_stake || stake_amount <= 0 {
@@ -206,6 +222,13 @@ impl CallRegistry {
             stakes.set(i, Map::new(&env));
         }
 
+        if let Some(ref wasm_hash) = config.share_wasm_hash {
+            for i in 1..=outcome_count {
+                let token_addr = shares::deploy_share_token(&env, wasm_hash, call_id, i);
+                share_tokens.set(i, token_addr);
+            }
+        }
+
         let call = Call {
             id: call_id,
             creator: creator.clone(),
@@ -227,6 +250,7 @@ impl CallRegistry {
             created_at: current_timestamp,
             cancelled: false,
             metadata_version: 0,
+            share_tokens,
         };
 
         set_call(&env, &call);
@@ -411,6 +435,11 @@ impl CallRegistry {
             amount,
         );
 
+        if let Some(share_token) = call.share_tokens.get(position) {
+            shares::mint_shares(&env, &share_token, &staker, amount);
+            emit_shares_minted(&env, call_id, &staker, position, amount);
+        }
+
         // Update stake maps with generalized position support
         let current_total = call.outcome_stakes.get(position).unwrap_or(0);
         call.outcome_stakes.set(position, current_total + amount);
@@ -442,6 +471,97 @@ impl CallRegistry {
         }
 
         Ok(call)
+    }
+
+    pub fn redeem_shares(
+        env: Env,
+        redeemer: Address,
+        call_id: u64,
+    ) -> Result<i128, CallRegistryError> {
+        redeemer.require_auth();
+
+        let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
+
+        if call.outcome == 0 {
+            panic!("call not yet resolved");
+        }
+        if !call.settled {
+            panic!("call not yet settled");
+        }
+
+        let winning_outcome = call.outcome;
+        let share_token = match call.share_tokens.get(winning_outcome) {
+            Some(t) => t,
+            None => panic!("share tokens not configured for this call"),
+        };
+
+        // Check redeemer's winning share balance
+        let balance = shares::share_balance(&env, &share_token, &redeemer);
+        if balance <= 0 {
+            panic!("no winning shares to redeem");
+        }
+
+        // Total winning pool and total stakes
+        let total_winning_stakes = call.outcome_stakes.get(winning_outcome).unwrap_or(0);
+        let total_all_stakes: i128 = (1..=call.outcome_count)
+            .map(|i| call.outcome_stakes.get(i).unwrap_or(0))
+            .sum();
+
+        // Payout: redeemer's share of winning pool gets proportional total pot
+        // Each winning share is worth: total_all_stakes / total_winning_stakes
+        let payout = if total_winning_stakes > 0 {
+            (balance as i128) * total_all_stakes / total_winning_stakes
+        } else {
+            0
+        };
+
+        if payout <= 0 {
+            panic!("zero payout");
+        }
+
+        // Burn the winning shares
+        shares::burn_shares(&env, &share_token, &redeemer, balance);
+
+        // Transfer payout from contract to redeemer
+        transfer_token(
+            &env,
+            &call.stake_token,
+            &env.current_contract_address(),
+            &redeemer,
+            payout,
+        );
+
+        emit_shares_redeemed(&env, call_id, &redeemer, winning_outcome, balance);
+
+        Ok(payout)
+    }
+
+    pub fn transfer_shares(
+        env: Env,
+        from: Address,
+        to: Address,
+        call_id: u64,
+        outcome: u32,
+        amount: i128,
+    ) -> Result<(), CallRegistryError> {
+        from.require_auth();
+
+        let call = get_call(&env, call_id).ok_or(CallRegistryError::CallNotFound)?;
+
+        if outcome < 1 || outcome > call.outcome_count {
+            return Err(CallRegistryError::InvalidPosition);
+        }
+
+        let share_token = match call.share_tokens.get(outcome) {
+            Some(t) => t,
+            None => return Err(CallRegistryError::NotInitialized), // or a dedicated error
+        };
+
+        soroban_sdk::token::Client::new(&env, &share_token).transfer(&from, &to, &amount);
+
+        emit_shares_transferred(&env, call_id, &from, &to, outcome, amount);
+
+        Ok(())
     }
 
     /// Set the maximum individual stake per user per position per call (admin only).

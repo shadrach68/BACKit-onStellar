@@ -298,3 +298,37 @@ pub fn emit_xlm_escrow_released(env: &Env, call_id: u64, to: &Address, amount: i
         (call_id, to.clone(), amount),
     );
 }
+
+pub fn emit_shares_minted(env: &Env, call_id: u64, staker: &Address, outcome: u32, amount: i128) {
+    env.events().publish(
+        ("call_registry", "SharesMinted"),
+        (call_id, staker.clone(), outcome, amount),
+    );
+}
+
+pub fn emit_shares_redeemed(
+    env: &Env,
+    call_id: u64,
+    redeemer: &Address,
+    outcome: u32,
+    amount: i128,
+) {
+    env.events().publish(
+        ("call_registry", "SharesRedeemed"),
+        (call_id, redeemer.clone(), outcome, amount),
+    );
+}
+
+pub fn emit_shares_transferred(
+    env: &Env,
+    call_id: u64,
+    from: &Address,
+    to: &Address,
+    outcome: u32,
+    amount: i128,
+) {
+    env.events().publish(
+        ("call_registry", "SharesTransferred"),
+        (call_id, from.clone(), to.clone(), outcome, amount),
+    );
+}

@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Bytes, Map};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Map};
 
 /// Describes the condition used to determine whether a call resolves as UP.
 #[contracttype]
@@ -54,6 +54,7 @@ pub struct Call {
     /// Whether the call has been cancelled by its creator
     pub cancelled: bool,
     pub metadata_version: u32,
+    pub share_tokens: Map<u32, Address>,
 }
 
 /// Enum representing stake positions on a call
@@ -104,6 +105,7 @@ pub struct ContractConfig {
     /// Number of seconds before `end_ts` during which staking is no longer
     /// accepted. Default: 300 (5 minutes). Set to 0 to disable the buffer.
     pub staking_cutoff_secs: u64,
+    pub share_wasm_hash: Option<BytesN<32>>,
 }
 
 /// Contract-wide aggregated statistics for dashboards.
