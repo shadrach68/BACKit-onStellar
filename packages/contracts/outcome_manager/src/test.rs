@@ -70,7 +70,7 @@ fn setup_single_oracle(
     Address,
     BytesN<32>,
     BytesN<32>,
-    OutcomeManagerClient,
+        OutcomeManagerClient<'_>,
 ) {
     env.mock_all_auths();
     let admin = Address::generate(env);
@@ -581,7 +581,7 @@ fn test_get_outcome_unsettled_panics() {
 // ─── Fee Deduction Tests ───────────────────────────────────────────────────────
 
 /// Helper: set up a contract with a specific fee_bps and settle call_id=1.
-fn setup_with_fee(env: &Env, fee_bps: u32) -> (Address, Address, OutcomeManagerClient) {
+fn setup_with_fee(env: &Env, fee_bps: u32) -> (Address, Address, OutcomeManagerClient<'_>) {
     env.mock_all_auths();
     let admin = Address::generate(env);
     let fee_collector = Address::generate(env);
