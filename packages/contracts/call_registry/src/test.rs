@@ -2,6 +2,8 @@
 #![allow(deprecated)]
 #![allow(unused)]
 
+extern crate std;
+
 use soroban_sdk::{
     contract, contractimpl,
     testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
@@ -2384,5 +2386,164 @@ mod native_xlm {
         let down_stake = client.get_staker_stake(&call.id, &staker, &2u32);
         assert_eq!(up_stake, half_xlm);
         assert_eq!(down_stake, quarter_xlm);
+    }
+}
+
+// ── SEP-10 tests ─────────────────────────────────────────────────────────────
+
+mod sep10_tests {
+    use super::*;
+    use crate::{CallRegistry, CallRegistryClient};
+    use ed25519_dalek::{Signer, SigningKey};
+    use soroban_sdk::{testutils::Ledger as _, Address, Bytes, BytesN, Env};
+
+    fn build_message_native(valid_until: u32, home_domain: &[u8]) -> std::vec::Vec<u8> {
+        let mut msg = std::vec::Vec::new();
+        msg.extend_from_slice(b"BACKit:SEP10:");
+        msg.extend_from_slice(&valid_until.to_be_bytes());
+        msg.extend_from_slice(b":");
+        msg.extend_from_slice(home_domain);
+        msg
+    }
+
+    fn make_signing_key(seed_byte: u8) -> SigningKey {
+        let mut seed = [0u8; 32];
+        seed[0] = seed_byte;
+        SigningKey::from_bytes(&seed)
+    }
+
+    fn pubkey_to_soroban(env: &Env, signing_key: &SigningKey) -> BytesN<32> {
+        BytesN::from_array(env, &signing_key.verifying_key().to_bytes())
+    }
+
+    fn sign(env: &Env, signing_key: &SigningKey, valid_until: u32, home_domain: &[u8]) -> BytesN<64> {
+        let msg = build_message_native(valid_until, home_domain);
+        let sig = signing_key.sign(&msg);
+        BytesN::from_array(env, &sig.to_bytes())
+    }
+
+    fn setup() -> (Env, CallRegistryClient<'static>, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(CallRegistry, ());
+        let client = CallRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let outcome_manager = Address::generate(&env);
+        client.initialize(&admin, &outcome_manager, &0i128);
+        (env, client, admin, outcome_manager)
+    }
+
+    #[test]
+    fn test_verify_sep10_token_valid() {
+        let (env, client, _, _) = setup();
+        let signing_key = make_signing_key(1);
+        let valid_until: u32 = 1000;
+        let home_domain = b"example.com";
+
+        env.ledger().set_sequence_number(500);
+
+        let pubkey = pubkey_to_soroban(&env, &signing_key);
+        let token = sign(&env, &signing_key, valid_until, home_domain);
+        let domain_bytes = Bytes::from_slice(&env, home_domain);
+
+        assert!(client.verify_sep10_token(&pubkey, &token, &valid_until, &domain_bytes));
+    }
+
+    #[test]
+    fn test_verify_sep10_token_expired() {
+        let (env, client, _, _) = setup();
+        let signing_key = make_signing_key(2);
+        let valid_until: u32 = 100;
+        let home_domain = b"example.com";
+
+        env.ledger().set_sequence_number(200);
+
+        let pubkey = pubkey_to_soroban(&env, &signing_key);
+        let token = sign(&env, &signing_key, valid_until, home_domain);
+        let domain_bytes = Bytes::from_slice(&env, home_domain);
+
+        assert!(!client.verify_sep10_token(&pubkey, &token, &valid_until, &domain_bytes));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_verify_sep10_token_wrong_pubkey() {
+        let (env, client, _, _) = setup();
+        let signing_key = make_signing_key(3);
+        let wrong_key = make_signing_key(99);
+        let valid_until: u32 = 1000;
+        let home_domain = b"example.com";
+
+        env.ledger().set_sequence_number(1);
+
+        let token = sign(&env, &signing_key, valid_until, home_domain);
+        let wrong_pubkey = pubkey_to_soroban(&env, &wrong_key);
+        let domain_bytes = Bytes::from_slice(&env, home_domain);
+
+        client.verify_sep10_token(&wrong_pubkey, &token, &valid_until, &domain_bytes);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_verify_sep10_token_tampered() {
+        let (env, client, _, _) = setup();
+        let signing_key = make_signing_key(4);
+        let valid_until: u32 = 1000;
+        let home_domain = b"example.com";
+
+        env.ledger().set_sequence_number(1);
+
+        let pubkey = pubkey_to_soroban(&env, &signing_key);
+        let mut sig_bytes = signing_key.sign(&build_message_native(valid_until, home_domain)).to_bytes();
+        sig_bytes[0] ^= 0xFF;
+        let tampered_token = BytesN::from_array(&env, &sig_bytes);
+        let domain_bytes = Bytes::from_slice(&env, home_domain);
+
+        client.verify_sep10_token(&pubkey, &tampered_token, &valid_until, &domain_bytes);
+    }
+
+    #[test]
+    fn test_link_sep10_domain_stores_and_emits() {
+        let (env, client, _, _) = setup();
+        let signing_key = make_signing_key(5);
+        let user = Address::generate(&env);
+        let valid_until: u32 = 1000;
+        let home_domain = b"trader.stellar";
+
+        env.ledger().set_sequence_number(1);
+
+        let pubkey = pubkey_to_soroban(&env, &signing_key);
+        let token = sign(&env, &signing_key, valid_until, home_domain);
+        let domain_bytes = Bytes::from_slice(&env, home_domain);
+
+        client.link_sep10_domain(&user, &pubkey, &token, &valid_until, &domain_bytes);
+
+        assert_eq!(client.get_sep10_home_domain(&user), Some(domain_bytes));
+    }
+
+    #[test]
+    fn test_link_sep10_domain_expired_returns_error() {
+        let (env, client, _, _) = setup();
+        let signing_key = make_signing_key(6);
+        let user = Address::generate(&env);
+        let valid_until: u32 = 50;
+        let home_domain = b"expired.stellar";
+
+        env.ledger().set_sequence_number(100);
+
+        let pubkey = pubkey_to_soroban(&env, &signing_key);
+        let token = sign(&env, &signing_key, valid_until, home_domain);
+        let domain_bytes = Bytes::from_slice(&env, home_domain);
+
+        let result = client.try_link_sep10_domain(&user, &pubkey, &token, &valid_until, &domain_bytes);
+        assert!(result.is_err());
+        assert_eq!(client.get_sep10_home_domain(&user), None);
+    }
+
+    #[test]
+    fn test_get_sep10_home_domain_none_before_link() {
+        let (env, client, _, _) = setup();
+        let user = Address::generate(&env);
+        assert_eq!(client.get_sep10_home_domain(&user), None);
     }
 }

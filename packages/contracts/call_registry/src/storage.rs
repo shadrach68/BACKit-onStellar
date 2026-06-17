@@ -1,5 +1,5 @@
 use crate::types::{Call, ContractConfig, CreatorStats, GlobalStats, StorageStats};
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, Address, Bytes, Env};
 
 // ~120 days in ledgers (5s per ledger): 120 * 24 * 3600 / 5 = 2_073_600
 pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = 1_036_800; // ~60 days
@@ -24,6 +24,7 @@ pub enum DataKey {
     DownStakerCount(u64),
     VoidRefundClaimed(u64, Address),
     InstanceEntryCount,
+    Sep10Domain(Address),
 }
 
 /// Store contract configuration
@@ -345,4 +346,21 @@ pub fn get_storage_stats(env: &Env) -> StorageStats {
         instance_entry_count,
         estimated_instance_bytes: instance_entry_count * 128,
     }
+}
+
+/// Persist a verified SEP-10 home_domain for a user.
+pub fn set_sep10_domain(env: &Env, user: &Address, domain: &Bytes) {
+    let key = DataKey::Sep10Domain(user.clone());
+    env.storage().persistent().set(&key, domain);
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
+}
+
+/// Retrieve a user's verified SEP-10 home_domain, if any.
+pub fn get_sep10_domain(env: &Env, user: &Address) -> Option<Bytes> {
+    let key = DataKey::Sep10Domain(user.clone());
+    env.storage().persistent().get(&key)
 }

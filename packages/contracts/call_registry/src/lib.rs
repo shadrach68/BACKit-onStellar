@@ -46,6 +46,7 @@ mod errors;
 mod events;
 #[cfg(test)]
 mod fuzz_tests;
+mod sep10;
 mod shares;
 mod storage;
 #[cfg(test)]
@@ -1216,5 +1217,57 @@ impl CallRegistry {
     /// Returns `true` when `addr` is the native XLM sentinel.
     pub fn is_native_xlm_address(env: Env, addr: Address) -> bool {
         is_native_xlm(&env, &addr)
+    }
+
+    // ── SEP-10 authentication ─────────────────────────────────────────────────
+
+    /// Verify a SEP-10 ed25519 token against a public key (view — no state change).
+    ///
+    /// Returns `true` if the signature is valid and the token has not expired.
+    /// Returns `false` if `valid_until` < current ledger sequence (expired).
+    /// Panics if the ed25519 signature is cryptographically invalid.
+    pub fn verify_sep10_token(
+        env: Env,
+        public_key: BytesN<32>,
+        token: BytesN<64>,
+        valid_until: u32,
+        home_domain: Bytes,
+    ) -> bool {
+        sep10::verify_sep10_token_impl(&env, &public_key, &token, valid_until, &home_domain)
+    }
+
+    /// Verify a SEP-10 token and permanently store the `home_domain` for `user`.
+    ///
+    /// Requires both a Soroban transaction signature (`user.require_auth()`) and
+    /// a valid SEP-10 token for identity binding (KYC / reputation tracking).
+    /// Emits `Sep10Verified(user, home_domain)` on success.
+    ///
+    /// # Errors
+    /// * [`CallRegistryError::Sep10TokenExpired`] – token's `valid_until` has passed.
+    pub fn link_sep10_domain(
+        env: Env,
+        user: Address,
+        public_key: BytesN<32>,
+        token: BytesN<64>,
+        valid_until: u32,
+        home_domain: Bytes,
+    ) -> Result<(), CallRegistryError> {
+        user.require_auth();
+
+        if !sep10::verify_sep10_token_impl(&env, &public_key, &token, valid_until, &home_domain) {
+            return Err(CallRegistryError::Sep10TokenExpired);
+        }
+
+        set_sep10_domain(&env, &user, &home_domain);
+        emit_sep10_verified(&env, &user, &home_domain);
+        extend_storage_ttl(&env);
+
+        Ok(())
+    }
+
+    /// Return the SEP-10-verified `home_domain` for a user, if they have linked one.
+    /// Returns `None` if the user has never called `link_sep10_domain`.
+    pub fn get_sep10_home_domain(env: Env, user: Address) -> Option<Bytes> {
+        get_sep10_domain(&env, &user)
     }
 }
